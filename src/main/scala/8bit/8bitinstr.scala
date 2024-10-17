@@ -4,20 +4,16 @@ import chisel3.util._
                             ///--N-bit Adder generator--/// 
 class Adder(width : Int) extends Module {
     val io = IO(new Bundle {
-        val a    = Input(UInt((width+1).W))
-        val b    = Input(UInt((width+1).W))
-        val cin  = Input(UInt(1.W))
+        val a    = Input(UInt((width+1).W)) // N+1bit first input
+        val b    = Input(UInt((width+1).W)) // N+1bit second input
+        val cin  = Input(UInt(1.W)) // 1bit carry in
 
-        val s    = Output(UInt((width+1).W))
-        val cout = Output(UInt(1.W))
+        val s    = Output(UInt((width+1).W))    // N+1bit sum output
+        val cout = Output(UInt(1.W))    // 1bit carry out output
     })
     //function of class Adder//
-    //val cout_s = Wire(UInt((width+1).W))  // Width + 1 takes care of the carry bit as well
-    //cout_s  := Cat(0.U(1.W),io.a) + Cat(0.U(1.W),io.b) + Cat(0.U(1.W), io.cin)      // concatenating extra bit to capture the carry out from MSB bit
-    io.s    := io.a + io.b + io.cin
-    //
-    //io.s    := cout_s((width-1),0)      // Seperating Sum 
-    io.cout := io.s(width)            // Seperating Carry
+    io.s    := io.a + io.b + io.cin // N+1bit sum result
+    io.cout := io.s(width)            // MSB of sum result is the carry out. 
 }
 
 ///============================PAADD.B -- SIMD 8bit Addition=========================///
@@ -40,14 +36,14 @@ class PAdd8 extends Module {
             
         A8(x).io.a   := io.rs1((x*8+7) , (x*8+0))     // 8bit elements of 32bit word assigned to their respective adders
         A8(x).io.b   := io.rs2((x*8+7) , (x*8+0))
-        A8(x).io.cin := carryin(x)      // assigned carryin for the adder
+        A8(x).io.cin := carryin(x)      // assigned carryin input for the adder
 
-        swire(x)     := A8(x).io.s(7,0)      // 8bit sum from adders assigned to internal wires
-        carryin(x+1) := A8(x).io.cout       // carry out from current adder assigned to carry in of next adder      
+        swire(x)     := A8(x).io.s(7,0)      // 8bits i.e., bit0 to bit7 of sum result assigned to eight internal wires
+        carryin(x+1) := A8(x).io.cout       // carryout output from current adder assigned to carryin input of next adder      
         
     }
 
-    io.rd := Cat(swire(3),swire(2),swire(1),swire(0))
+    io.rd := Cat(swire(3),swire(2),swire(1),swire(0))   // concatenate the wires to form the output result rd
     //cout := carryin(4)    //the carry out from the component to be assined depending on the instruction 
 }
 
@@ -66,13 +62,13 @@ class PAADD8 extends Module {
 
     
     for (x <- 0 until 4) {
-        A8(x).io.cin := 0.U
-        A8(x).io.a := Cat(io.Rs1((x*8+7)) , io.Rs1((x*8+7) , (x*8+0)))
-        A8(x).io.b := Cat(io.Rs2((x*8+7)) , io.Rs2((x*8+7) , (x*8+0)))
+        A8(x).io.cin := 0.U // carryin inputs assigned zero. Since not used.
+        A8(x).io.a   := Cat(io.Rs1((x*8+7)) , io.Rs1((x*8+7) , (x*8+0))) // concatenate the MSB of the 8bit element to itself i.e., Sign extended to 9bits
+        A8(x).io.b   := Cat(io.Rs2((x*8+7)) , io.Rs2((x*8+7) , (x*8+0)))
 
-        sumshift(x)  :=  A8(x).io.s(8,1)
+        sumshift(x)  :=  A8(x).io.s(8,1)    // right shift by 1. Bit8 to Bit1 assigned to 8bit wire sumshift
     }
-    io.Rd := Cat(sumshift(3),sumshift(2),sumshift(1),sumshift(0))
+    io.Rd := Cat(sumshift(3),sumshift(2),sumshift(1),sumshift(0))   // concatenate the wires to form rd
 }
 
 ///============================PAADDU.B -- SIMD 8-bit Unsigned Averaging Addition=========================///
