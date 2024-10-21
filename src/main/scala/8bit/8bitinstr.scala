@@ -125,6 +125,33 @@ class PAADD8U extends Module {
     */
 }
 
+//======================================PSADDU.B -- SIMD 8Bit Unsigned Saturating Addition=================================///
+class PSADD8U extends Module{
+    val io = IO(new Bundle {
+        val Rs1 = Input(UInt(32.W))
+        val Rs2 = Input(UInt(32.W))
+        val Rd  = Output(UInt(32.W))
+    })
+
+    //function of Class PSADD8U
+    val UA8   = Seq.fill(4)(Module(new Adder(8,UInt(9.W))))
+    val sWire = Wire(Vec(4, UInt(8.W)))
+
+    for (x <- 0 until 4) {
+        UA8(x).io.cin := 0.U
+        UA8(x).io.a   := io.Rs1((x*8+7) , (x*8+0))    // 8bit element from Rs1 assigned to 9bit UInt Input port. Zero extended to 9bits.
+        UA8(x).io.b   := io.Rs2((x*8+7) , (x*8+0))    // 8bit element from Rs2 assigned to 9bit UInt Input port. Zero extended to 9bits.
+       //tReg := UA8(x).io.sum       // 9 bit result can be stored in temporary register. Need to declare a 32bit temp register and wires then
+       
+        when(UA8(x).io.sum(8) === 1.U) {    // if 9th bit of sum output i.e., Carryout bit is 1
+            sWire(x) := 255.U       // saturate the result
+        }.otherwise {
+            sWire(x) := UA8(x).io.sum(7,0)      //else get the sum 
+        }
+    }
+
+    io.Rd := Cat(sWire(3), sWire(2), sWire(1), sWire(0))    // Concatenate the result into a 32bit word.
+}
 
 ///==============================================PADD.W -- SIMD 32bit Addition=============================================///
 /* - 32bit Rs1 is added with 32bit Rs2. The results are stored in 32bit Rd.

@@ -99,6 +99,28 @@ class PAADD8UTester extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 }
+//=============================TESTER=====PSADDU.B -- SIMD 8Bit Unsigned Saturating Addition========================///
+class PSADD8UTester extends AnyFlatSpec with ChiselScalatestTester {
+  "PSADD8U" should "correctly compute Unsigned Saturating Addition" in {
+    test(new PSADD8U) { dut =>
+      
+      // Test Case:  
+      dut.io.Rs1.poke("hFF_FF_80_40".U) // 
+      dut.io.Rs2.poke("h02_01_80_80".U) // 
+      dut.clock.step()
+      //for addition result exceeding the 8bit register limit of FF, output saturates to FF. Eg 127 + 127 = 255 i.e., h80+h80 != h100 but hFF
+      dut.io.Rd.expect("hFF_FF_FF_C0".U)
+
+    }
+  }
+}
+
+
+
+
+
+
+
 ///============================TESTER====PADD.W -- SIMD 32-bit Addition=========================///
 class PADD32Tester extends AnyFlatSpec with ChiselScalatestTester {
   "PADD32" should "correctly compute 32bit addition" in {
