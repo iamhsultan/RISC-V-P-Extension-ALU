@@ -35,15 +35,16 @@ class Adder[T <: Data](width: Int, gen: T) extends Module {
    - Internally PADD.B addition operation is indifferent to whether the given data is signed or unsigned. It simply adds the binary values. 
      The interpretation as signed or unsigned depends on whether the values in the registers are treated as signed or unsigned by the user.
 */
-class PADD8 extends Module {
+class PADDB extends Module {
     val io = IO(new Bundle {
-        val Rs1 = Input(UInt(32.W))
-        val Rs2 = Input(UInt(32.W))
-        val Rd  = Output(UInt(32.W))
+        val Rs1   = Input(UInt(32.W))
+        val Rs2   = Input(UInt(32.W))
+        val Rd    = Output(UInt(32.W))
+        val vxsat = Output(UInt(1.W))       // vxsat CSR has OV information in LSB. vxsat[XLEN,1] bits are reserved.
     })
 
     val UA8     = Seq.fill(4)(Module(new Adder(8,UInt(9.W))))  // generate four 8bit unsigned. Internally adder should operate on 9bit data
-   
+    val vxsatOV = RegInit(0.U(1.W))        // Reg to store overflow across all clock cycles. Reset value of OV flag is 0.
     //Function of class PAdd8    
     for (x <- 0 until 4) { 
         UA8(x).io.cin    := 0.U    // Carryin not used
@@ -59,6 +60,7 @@ class PADD8 extends Module {
              0_1111_0011  --> -13 in 2's complement
              1_1110_1001  --> -23 in 2's complement
     */
+    io.vxsat := vxsatOV
 }
 
 
@@ -73,15 +75,17 @@ class PADD8 extends Module {
    **Up for discussion:
    - type of Rs1, Rs2, Rd. Chosen SInt here just to test the decimal value test case in tester.
 */
-class PAADD8 extends Module {
+class PAADDB extends Module {
     val io = IO(new Bundle{
-        val Rs1 = Input(SInt(32.W))
-        val Rs2 = Input(SInt(32.W))
-        val Rd  = Output(SInt(32.W))
+        val Rs1   = Input(SInt(32.W))
+        val Rs2   = Input(SInt(32.W))
+        val Rd    = Output(SInt(32.W))
+        val vxsat = Output(UInt(1.W))       // vxsat CSR has OV information in LSB. vxsat[XLEN,1] bits are reserved.
     })
 
     //function of class PAADD8
     val SA8      = Seq.fill(4)(Module(new Adder(8,SInt(9.W))))
+    val vxsatOV  = RegInit(0.U(1.W))        // Reg to store overflow across all clock cycles. Reset value of OV flag is 0.
     //val shiftsum = Reg(Vec(4,SInt(9.W)))
     
     for (x <- 0 until 4) {
@@ -100,18 +104,21 @@ class PAADD8 extends Module {
     /* - Extraction of upper 8 bits out of total 9bit result takes care of the shift arithmetic right operation.
        - Converting to asSInt is for testing the case of signed decimal input ( eg -8 + (-2) = -5 ) in tester.
     */
+    io.vxsat := vxsatOV
 }
 
 ///==========================================PAADDU.B -- SIMD 8-bit Unsigned Averaging Addition========================================///
-class PAADD8U extends Module {
+class PAADDUB extends Module {
     val io = IO(new Bundle{
-        val Rs1 = Input(UInt(32.W))
-        val Rs2 = Input(UInt(32.W))
-        val Rd  = Output(UInt(32.W))
+        val Rs1   = Input(UInt(32.W))
+        val Rs2   = Input(UInt(32.W))
+        val Rd    = Output(UInt(32.W)) 
+        val vxsat = Output(UInt(1.W))       // vxsat CSR has OV information in LSB. vxsat[XLEN,1] bits are reserved.      
     })
 
     // function of class PAADD8U
-    val UA8  = Seq.fill(4)(Module(new Adder(8,UInt(9.W))))
+    val UA8      = Seq.fill(4)(Module(new Adder(8,UInt(9.W))))
+    val vxsatOV  = RegInit(0.U(1.W))        // Reg to store overflow across all clock cycles. Reset value of OV flag is 0.
     
     for (x <- 0 until 4) {
         UA8(x).io.cin := 0.U // carryin inputs assigned zero. Since not used.
@@ -123,19 +130,22 @@ class PAADD8U extends Module {
      /* - Addition of 9bit inputs with carryin = 0 takes place in the Unsigned-Adder-8 module
         - Upper 8bits from each adder sum are extracted. This takes care of the shift aritmetic right by 1 operation. 
     */
+    io.vxsat := vxsatOV
 }
 
 //======================================PSADDU.B -- SIMD 8Bit Unsigned Saturating Addition=================================///
-class PSADD8U extends Module{
+class PSADDUB extends Module{
     val io = IO(new Bundle {
-        val Rs1 = Input(UInt(32.W))
-        val Rs2 = Input(UInt(32.W))
-        val Rd  = Output(UInt(32.W))
+        val Rs1   = Input(UInt(32.W))
+        val Rs2   = Input(UInt(32.W))
+        val Rd    = Output(UInt(32.W))
+        val vxsat = Output(UInt(1.W))       // vxsat CSR has OV information in LSB. vxsat[XLEN,1] bits are reserved.
     })
 
     //function of Class PSADD8U
-    val UA8   = Seq.fill(4)(Module(new Adder(8,UInt(9.W))))
-    val sWire = Wire(Vec(4, UInt(8.W)))
+    val UA8      = Seq.fill(4)(Module(new Adder(8,UInt(9.W))))
+    val vxsatOV  = RegInit(0.U(1.W))        // Reg to store overflow across all clock cycles. Reset value of OV flag is 0. 
+    val sWire    = Wire(Vec(4, UInt(8.W)))
 
     for (x <- 0 until 4) {
         UA8(x).io.cin := 0.U
@@ -145,12 +155,14 @@ class PSADD8U extends Module{
        
         when(UA8(x).io.sum(8) === 1.U) {    // if 9th bit of sum output i.e., Carryout bit is 1
             sWire(x) := 255.U       // saturate the result
+            vxsatOV  := 1.U 
         }.otherwise {
             sWire(x) := UA8(x).io.sum(7,0)      //else get the sum 
         }
     }
 
-    io.Rd := Cat(sWire(3), sWire(2), sWire(1), sWire(0))    // Concatenate the result into a 32bit word.
+    io.Rd    := Cat(sWire(3), sWire(2), sWire(1), sWire(0))    // Concatenate the result into a 32bit word.
+    io.vxsat := vxsatOV
 }
 
 ///==============================================PADD.W -- SIMD 32bit Addition=============================================///
@@ -162,15 +174,17 @@ class PSADD8U extends Module{
    - The PADD32.W instruction is indifferent to whether the data is signed or unsigned. It simply adds the binary values. 
      The interpretation as signed or unsigned depends on whether the values in the registers are treated as signed or unsigned by the user.
 */
-class PADD32 extends Module {
+class PADDW extends Module {
     val io = IO(new Bundle {
-        val Rs1 = Input(UInt(32.W))
-        val Rs2 = Input(UInt(32.W))
-        val Rd  = Output(UInt(32.W))
+        val Rs1   = Input(UInt(32.W))
+        val Rs2   = Input(UInt(32.W))
+        val Rd    = Output(UInt(32.W))
+        val vxsat = Output(UInt(1.W))       // vxsat CSR has OV information in LSB. vxsat[XLEN,1] bits are reserved.
     })
 
-    val UA8     = Seq.fill(4)(Module(new Adder(8,UInt(9.W))))  // generate four 8bit unsigned adders. Internally adder should operate on 9bit data
-    val carryin = Wire(Vec(5,UInt(1.W)))    // Generate five wires for internal carrys between adders. c0 to c4
+    val UA8      = Seq.fill(4)(Module(new Adder(8,UInt(9.W))))  // generate four 8bit unsigned adders. Internally adder should operate on 9bit data
+    val carryin  = Wire(Vec(5,UInt(1.W)))    // Generate five wires for internal carrys between adders. c0 to c4
+    val vxsatOV  = RegInit(0.U(1.W))        // Reg to store overflow across all clock cycles. Reset value of OV flag is 0.
    
     //Function of class PAdd8 
     carryin(0) := 0.U   // initial carry for first Adder(8) 
@@ -184,8 +198,9 @@ class PADD32 extends Module {
 
     io.Rd := Cat(UA8(3).io.sum(7,0), UA8(2).io.sum(7,0), UA8(1).io.sum(7,0), UA8(0).io.sum(7,0))   // concatenate bit7 to bit0 from each adder to form the output result rd
     //cout := carryin(4)    //the carry out from the component to be assined depending on the instruction 
+    io.vxsat := vxsatOV
 }
 
 object GenerateVerilog extends App {
-  (new chisel3.stage.ChiselStage).emitVerilog(new PADD8(), Array("--target-dir", "generated"))
+  (new chisel3.stage.ChiselStage).emitVerilog(new PADDB(), Array("--target-dir", "generated"))
 }

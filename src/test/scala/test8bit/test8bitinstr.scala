@@ -4,9 +4,9 @@ import org.scalatest.flatspec.AnyFlatSpec
 
 ///============================TESTER====PAADD.B -- SIMD 8bit Addition=========================///
 
-class PADD8Tester extends AnyFlatSpec with ChiselScalatestTester {
-  "PADD8" should "correctly compute 8bit addition" in {
-    test(new PADD8) { dut =>
+class PADDBTester extends AnyFlatSpec with ChiselScalatestTester {
+  "PADDB" should "correctly compute 8bit addition" in {
+    test(new PADDB) { dut =>
       // Test Case 1
       val Rs1 = 0x00204060.U // First 32-bit word (Byte 4: 0x00, Byte 3: 0x20, Byte 2: 0x40, Byte 1: 0x60)
       val Rs2 = 0x01030507.U // Second 32-bit word (Byte 4: 0x01, Byte 3: 0x03, Byte 2: 0x05, Byte 1: 0x07)     
@@ -42,9 +42,9 @@ class PADD8Tester extends AnyFlatSpec with ChiselScalatestTester {
 
 ///============================TESTER====PAADD.B -- SIMD 8-bit Signed Averaging Addition=========================///
 
-class PAADD8Tester extends AnyFlatSpec with ChiselScalatestTester {
-  "PAADD8" should "correctly compute Signed Averaging Addition" in {
-    test(new PAADD8) { dut =>
+class PAADDBTester extends AnyFlatSpec with ChiselScalatestTester {
+  "PAADDB" should "correctly compute Signed Averaging Addition" in {
+    test(new PAADDB) { dut =>
       //Test Case : Rs1 = 0x7F_00_80_00, Rs2 = 0x7F_00_80_00
       dut.io.Rs1.poke(0x7F008000.S) // Rs1 = 127, 0, -128, 0
       dut.io.Rs2.poke(0x7F008000.S) // Rs2 = 127, 0, -128, 0
@@ -85,9 +85,9 @@ class PAADD8Tester extends AnyFlatSpec with ChiselScalatestTester {
 
 
 ///============================TESTER====PAADDU.B -- SIMD 8-bit Unsigned Averaging Addition=========================///
-class PAADD8UTester extends AnyFlatSpec with ChiselScalatestTester {
-  "PAADD8U" should "correctly compute Unsigned Averaging Addition" in {
-    test(new PAADD8U) { dut =>
+class PAADDUBTester extends AnyFlatSpec with ChiselScalatestTester {
+  "PAADDUB" should "correctly compute Unsigned Averaging Addition" in {
+    test(new PAADDUB) { dut =>
       
       // Test Case:  Rs1 = 0x7F_00_80_00, Rs2 = 0x7F_00_80_00
       dut.io.Rs1.poke("h00_7F_80_40".U) // Rs1 = 127, 0, -128, 0
@@ -100,9 +100,9 @@ class PAADD8UTester extends AnyFlatSpec with ChiselScalatestTester {
   }
 }
 //=============================TESTER=====PSADDU.B -- SIMD 8Bit Unsigned Saturating Addition========================///
-class PSADD8UTester extends AnyFlatSpec with ChiselScalatestTester {
-  "PSADD8U" should "correctly compute Unsigned Saturating Addition" in {
-    test(new PSADD8U) { dut =>
+class PSADDUBTester extends AnyFlatSpec with ChiselScalatestTester {
+  "PSADDUB" should "correctly compute Unsigned Saturating Addition" in {
+    test(new PSADDUB) { dut =>
       
       // Test Case:  
       dut.io.Rs1.poke("hFF_FF_80_40".U) // 
@@ -122,9 +122,9 @@ class PSADD8UTester extends AnyFlatSpec with ChiselScalatestTester {
 
 
 ///============================TESTER====PADD.W -- SIMD 32-bit Addition=========================///
-class PADD32Tester extends AnyFlatSpec with ChiselScalatestTester {
-  "PADD32" should "correctly compute 32bit addition" in {
-    test(new PADD32) { dut =>
+class PADDWTester extends AnyFlatSpec with ChiselScalatestTester {
+  "PADDW" should "correctly compute 32bit addition" in {
+    test(new PADDW) { dut =>
       // Test Case 1
       val Rs1 = 0x00204060.U // First 32-bit word (Byte 4: 0x00, Byte 3: 0x20, Byte 2: 0x40, Byte 1: 0x60)
       val Rs2 = 0x01030507.U // Second 32-bit word (Byte 4: 0x01, Byte 3: 0x03, Byte 2: 0x05, Byte 1: 0x07)      
