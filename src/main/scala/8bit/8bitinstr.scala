@@ -27,6 +27,19 @@ class Adder[T <: Data](width: Int, gen: T) extends Module {
     io.cout := result(width)        // MSB of result i.e., N+1th bit is assigned to carryout output.
   }
 
+
+///============================================N-bit Two's Complement generator========================================///
+class TwosComplementGenerator(width: Int) extends Module {
+    val io =IO(new Bundle {
+        val input  = Input(UInt(width.W))
+        val output = Output(UInt(width.W)) 
+    })
+
+    // Function of class TwosComplementGenerator 
+    val complementValue = ~(io.input) + 1.U     // One's complement of operand B is added 1 to get 2's complement
+    io.output := complementValue
+}
+
 ///==========================================PADD.B -- SIMD 8bit Addition=========================================///
 /* - Four 8bit elements in 32bit Rs1 are added with corresponding four 8bit elements in Rs2. The results are stored in corresponding 8bit elements in Rd.
    - The specification mentions that this instruction is used for signed and unsigned addition.
@@ -142,7 +155,7 @@ class PSADDUB extends Module{
         val vxsat = Output(UInt(1.W))       // vxsat CSR has OV information in LSB. vxsat[XLEN,1] bits are reserved.
     })
 
-    //function of Class PSADD8U
+    //function of Class PSADDUB
     val UA8      = Seq.fill(4)(Module(new Adder(8,UInt(9.W))))
     val vxsatOV  = RegInit(0.U(1.W))        // Reg to store overflow across all clock cycles. Reset value of OV flag is 0. 
     val sWire    = Wire(Vec(4, UInt(8.W)))
@@ -164,6 +177,7 @@ class PSADDUB extends Module{
     io.Rd    := Cat(sWire(3), sWire(2), sWire(1), sWire(0))    // Concatenate the result into a 32bit word.
     io.vxsat := vxsatOV
 }
+
 
 ///==============================================PADD.W -- SIMD 32bit Addition=============================================///
 /* - 32bit Rs1 is added with 32bit Rs2. The results are stored in 32bit Rd.
@@ -198,6 +212,150 @@ class PADDW extends Module {
 
     io.Rd := Cat(UA8(3).io.sum(7,0), UA8(2).io.sum(7,0), UA8(1).io.sum(7,0), UA8(0).io.sum(7,0))   // concatenate bit7 to bit0 from each adder to form the output result rd
     //cout := carryin(4)    //the carry out from the component to be assined depending on the instruction 
+    io.vxsat := vxsatOV
+}
+//==========================================================================================================================================================================//
+
+//============================================PSUB.B -- SIMD 8Bit Subtraction=========================================///
+class PSUB extends Module {
+    val io =IO(new Bundle {
+        val Rs1   = Input(UInt(32.W))
+        val Rs2   = Input(UInt(32.W))
+        val Rd    = Output(UInt(32.W))
+        val vxsat = Output(UInt(1.W))
+    })
+
+    // Funtion of class PSUB
+    val twosComplement = Seq.fill(4)(Module(new TwosComplementGenerator(8)))     // Instantaition of 8bit two's complement generator for operand B
+    val A8             = Seq.fill(4)(Module(new Adder(8,UInt(9.W))))        // Instantaition of four 8bit Adders with 9bit ports
+    val vxsatOV        = RegInit(0.U(1.W))
+    for(x <- 0 until 4) {
+        A8(x).io.cin            := 0.U
+        A8(x).io.a              := io.Rs1((x*8+7) , (x*8+0))    // 8bit Operand A assigned to 9bit port of Adder8
+        twosComplement(x).io.input := io.Rs2((x*8+7) , (x*8+0))    // twos complement calculation for operand B
+        A8(x).io.b              := twosComplement(x).io.output     // 8bit Two's Complement of Operand B assigned to 9bit port of Adder8
+    }
+    io.Rd := Cat(A8(3).io.sum(7,0) , A8(2).io.sum(7,0) , A8(1).io.sum(7,0) , A8(0).io.sum(7,0) )
+    io.vxsat := vxsatOV
+}
+
+//======================================PASUB.B -- SIMD 8Bit Signed Averaging Subtraction=================================///
+class PASUBB extends Module {
+    val io = IO(new Bundle {
+        val Rs1   = Input(SInt(32.W))
+        val Rs2   = Input(SInt(32.W))
+        val Rd    = Output(SInt(32.W))
+        val vxsat = Output(UInt(1.W))
+    })
+
+    // Function of class PASUBB
+    val SA8            = Seq.fill(4)(Module(new Adder(8,SInt(9.W))))
+    val twosComplement = Seq.fill(4)(Module(new TwosComplementGenerator(8)))
+    val vxsatOV        = RegInit(0.U(1.W))
+    //val tempResult     = Wire(Vec(4,SInt(9.W)))
+
+    for(x <- 0 until 4) {
+        SA8(x).io.cin               := 0.U
+        SA8(x).io.a                 := (io.Rs1((x*8+7) , (x*8+0))).asSInt
+        twosComplement(x).io.input  := io.Rs2((x*8+7) , (x*8+0))
+        SA8(x).io.b                 := (twosComplement(x).io.output).asSInt
+    }
+    io.Rd   := Cat(SA8(3).io.sum(8,1) , SA8(2).io.sum(8,1) , SA8(1).io.sum(8,1) , SA8(0).io.sum(8,1))
+    io.vxsat := vxsatOV
+}
+//======================================PASUBU.B -- SIMD 8Bit Unsigned Averaging Subtraction=================================///
+class PASUBUB extends Module {
+    val io = IO(new Bundle{
+        val Rs1   = Input(UInt(32.W))
+        val Rs2   = Input(UInt(32.W))
+        val Rd    = Output(UInt(32.W)) 
+        val vxsat = Output(UInt(1.W))       // vxsat CSR has OV information in LSB. vxsat[XLEN,1] bits are reserved.      
+    })
+
+    // Function of class PASUBUB
+    val UA8            = Seq.fill(4)(Module(new Adder(8,UInt(9.W))))
+    val twosComplement = Seq.fill(4)(Module(new TwosComplementGenerator(8)))
+    val vxsatOV        = RegInit(0.U(1.W))        // Reg to store overflow across all clock cycles. Reset value of OV flag is 0.
+    
+    for (x <- 0 until 4) {
+        UA8(x).io.cin              := 0.U // carryin inputs assigned zero. Since not used.
+        UA8(x).io.a                := io.Rs1((x*8+7) , (x*8+0))     // 8bit unsigned inputs assigned to 9bit adder input. Zero extended to 9bit implicitly. 
+        twosComplement(x).io.input := io.Rs2((x*8+7) , (x*8+0))
+        UA8(x).io.b                := twosComplement(x).io.output
+    }
+
+     io.Rd     := Cat(UA8(3).io.sum(8,1), UA8(2).io.sum(8,1), UA8(1).io.sum(8,1), UA8(0).io.sum(8,1)) 
+     io.vxsat := vxsatOV
+}
+
+//======================================PSSUB.B -- SIMD 8Bit Signed Saturating Subtraction=================================///
+class PSSUBB extends Module{
+    val io = IO(new Bundle {
+        val Rs1   = Input(SInt(32.W))
+        val Rs2   = Input(SInt(32.W))
+        val Rd    = Output(SInt(32.W))
+        val vxsat = Output(UInt(1.W))       // vxsat CSR has OV information in LSB. vxsat[XLEN,1] bits are reserved.
+    })
+
+    //function of Class PSSUBB
+    val SA8            = Seq.fill(4)(Module(new Adder(8,SInt(9.W))))
+    val twosComplement = Seq.fill(4)(Module(new TwosComplementGenerator(8)))
+    val vxsatOV        = RegInit(0.U(1.W))        // Reg to store overflow across all clock cycles. Reset value of OV flag is 0. 
+    val sWire          = Wire(Vec(4, SInt(8.W)))
+
+    for (x <- 0 until 4) {
+        SA8(x).io.cin              := 0.U
+        SA8(x).io.a                := io.Rs1((x*8+7) , (x*8+0)).asSInt    // 8bit element from Rs1 assigned to 9bit UInt Input port. Zero extended to 9bits.
+        twosComplement(x).io.input := io.Rs2((x*8+7) , (x*8+0))
+        SA8(x).io.b                := (twosComplement(x).io.output).asSInt
+
+        when((SA8(x).io.sum).asSInt < -128.S) {    // 
+            sWire(x) := -128.S       // saturate the result
+            vxsatOV  := 1.U 
+        }.elsewhen((SA8(x).io.sum).asSInt > 127.S) {
+            sWire(x) := 127.S
+            vxsatOV  := 1.U 
+        }.otherwise{
+            sWire(x) := SA8(x).io.sum(7,0)      //else get the sum 
+        }
+    }
+
+    io.Rd    := (Cat(sWire(3), sWire(2), sWire(1), sWire(0))).asSInt    // Concatenate the result into a 32bit word.  // REMOVE THE asSInt LATER
+    io.vxsat := vxsatOV
+}
+
+
+//======================================PSSUBU.B -- SIMD 8Bit Unsigned Saturating Subtraction=================================///
+class PSSUBUB extends Module{
+    val io = IO(new Bundle {
+        val Rs1   = Input(UInt(32.W))
+        val Rs2   = Input(UInt(32.W))
+        val Rd    = Output(UInt(32.W))
+        val vxsat = Output(UInt(1.W))       // vxsat CSR has OV information in LSB. vxsat[XLEN,1] bits are reserved.
+    })
+
+    //function of Class PSSUBUB
+    val UA8            = Seq.fill(4)(Module(new Adder(8,UInt(9.W))))
+    val twosComplement = Seq.fill(4)(Module(new TwosComplementGenerator(8))) 
+    val vxsatOV        = RegInit(0.U(1.W))        // Reg to store overflow across all clock cycles. Reset value of OV flag is 0. 
+    val sWire          = Wire(Vec(4, UInt(8.W)))
+
+    for (x <- 0 until 4) {
+        UA8(x).io.cin           := 0.U
+        UA8(x).io.a             := io.Rs1((x*8+7) , (x*8+0))    // 8bit element from Rs1 assigned to 9bit UInt Input port. Zero extended to 9bits.
+        twosComplement(x).io.input := io.Rs2((x*8+7) , (x*8+0))
+        UA8(x).io.b             := twosComplement(x).io.output    // 8bit element from Rs2 assigned to 9bit UInt Input port. Zero extended to 9bits.
+       
+        // Overflow will not occur in Unsigned Subtraction though but specs mentions it.
+        when(UA8(x).io.sum(8) === 1.U) {    // if 9th bit of sum output i.e., Carryout bit is 1
+            sWire(x) := 255.U       // saturate the result
+            vxsatOV  := 1.U 
+        }.otherwise {
+            sWire(x) := UA8(x).io.sum(7,0)      //else get the sum 
+        }
+    }
+
+    io.Rd    := Cat(sWire(3), sWire(2), sWire(1), sWire(0))    // Concatenate the result into a 32bit word.
     io.vxsat := vxsatOV
 }
 

@@ -115,12 +115,6 @@ class PSADDUBTester extends AnyFlatSpec with ChiselScalatestTester {
   }
 }
 
-
-
-
-
-
-
 ///============================TESTER====PADD.W -- SIMD 32-bit Addition=========================///
 class PADDWTester extends AnyFlatSpec with ChiselScalatestTester {
   "PADDW" should "correctly compute 32bit addition" in {
@@ -151,3 +145,7 @@ class PADDWTester extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 }
+
+//===============================================================================================================================================//
+//SUBTRACTION
+//===============================================================================================================================================//
