@@ -27,19 +27,6 @@ class Adder[T <: Data](width: Int, gen: T) extends Module {
     io.cout := result(width)        // MSB of result i.e., N+1th bit is assigned to carryout output.
   }
 
-
-///============================================N-bit Two's Complement generator========================================///
-class TwosComplementGenerator(width: Int) extends Module {
-    val io =IO(new Bundle {
-        val input  = Input(UInt(width.W))
-        val output = Output(UInt(width.W)) 
-    })
-
-    // Function of class TwosComplementGenerator 
-    val complementValue = ~(io.input) + 1.U     // One's complement of operand B is added 1 to get 2's complement
-    io.output := complementValue
-}
-
 ///==========================================PADD.B -- SIMD 8bit Addition=========================================///
 /* - Four 8bit elements in 32bit Rs1 are added with corresponding four 8bit elements in Rs2. The results are stored in corresponding 8bit elements in Rd.
    - The specification mentions that this instruction is used for signed and unsigned addition.
@@ -214,10 +201,22 @@ class PADDW extends Module {
     //cout := carryin(4)    //the carry out from the component to be assined depending on the instruction 
     io.vxsat := vxsatOV
 }
-//==========================================================================================================================================================================//
+//=============================================================SUBTRACTION=============================================================================================================//
 
-//============================================PSUB.B -- SIMD 8Bit Subtraction=========================================///
-class PSUB extends Module {
+///============================================N-bit Two's Complement generator========================================///
+class TwosComplementGenerator(width: Int) extends Module {
+    val io =IO(new Bundle {
+        val input  = Input(UInt((width+1).W))
+        val output = Output(UInt((width+1).W)) 
+    })
+
+    // Function of class TwosComplementGenerator 
+    val complementValue = ~(io.input) + 1.U     // One's complement of operand B is added 1 to get 2's complement. Concatenation 0 is done to get correct 2's complement for values greater than 127
+    io.output := complementValue
+}
+
+//============================================PSUB.B -- SIMD 8Bit Subtraction=================OK TESTED========================///
+class PSUBB extends Module {
     val io =IO(new Bundle {
         val Rs1   = Input(UInt(32.W))
         val Rs2   = Input(UInt(32.W))
@@ -225,15 +224,15 @@ class PSUB extends Module {
         val vxsat = Output(UInt(1.W))
     })
 
-    // Funtion of class PSUB
+    // Funtion of class PSUBB
     val twosComplement = Seq.fill(4)(Module(new TwosComplementGenerator(8)))     // Instantaition of 8bit two's complement generator for operand B
     val A8             = Seq.fill(4)(Module(new Adder(8,UInt(9.W))))        // Instantaition of four 8bit Adders with 9bit ports
     val vxsatOV        = RegInit(0.U(1.W))
     for(x <- 0 until 4) {
-        A8(x).io.cin            := 0.U
-        A8(x).io.a              := io.Rs1((x*8+7) , (x*8+0))    // 8bit Operand A assigned to 9bit port of Adder8
-        twosComplement(x).io.input := io.Rs2((x*8+7) , (x*8+0))    // twos complement calculation for operand B
-        A8(x).io.b              := twosComplement(x).io.output     // 8bit Two's Complement of Operand B assigned to 9bit port of Adder8
+        A8(x).io.cin               := 0.U
+        A8(x).io.a                 := io.Rs1((x*8+7) , (x*8+0))    // 8bit Operand A assigned to 9bit port of Adder8
+        twosComplement(x).io.input := Cat(io.Rs2(x*8+7) , io.Rs2((x*8+7) , (x*8+0)))   // twos complement calculation for operand B
+        A8(x).io.b                 := twosComplement(x).io.output     // 8bit Two's Complement of Operand B assigned to 9bit port of Adder8
     }
     io.Rd := Cat(A8(3).io.sum(7,0) , A8(2).io.sum(7,0) , A8(1).io.sum(7,0) , A8(0).io.sum(7,0) )
     io.vxsat := vxsatOV
@@ -257,10 +256,10 @@ class PASUBB extends Module {
     for(x <- 0 until 4) {
         SA8(x).io.cin               := 0.U
         SA8(x).io.a                 := (io.Rs1((x*8+7) , (x*8+0))).asSInt
-        twosComplement(x).io.input  := io.Rs2((x*8+7) , (x*8+0))
+        twosComplement(x).io.input  := Cat(io.Rs2(x*8+7) , io.Rs2((x*8+7) , (x*8+0)))
         SA8(x).io.b                 := (twosComplement(x).io.output).asSInt
     }
-    io.Rd   := Cat(SA8(3).io.sum(8,1) , SA8(2).io.sum(8,1) , SA8(1).io.sum(8,1) , SA8(0).io.sum(8,1))
+    io.Rd   := Cat(SA8(3).io.sum(8,1) , SA8(2).io.sum(8,1) , SA8(1).io.sum(8,1) , SA8(0).io.sum(8,1)).asSInt
     io.vxsat := vxsatOV
 }
 //======================================PASUBU.B -- SIMD 8Bit Unsigned Averaging Subtraction=================================///
@@ -280,7 +279,7 @@ class PASUBUB extends Module {
     for (x <- 0 until 4) {
         UA8(x).io.cin              := 0.U // carryin inputs assigned zero. Since not used.
         UA8(x).io.a                := io.Rs1((x*8+7) , (x*8+0))     // 8bit unsigned inputs assigned to 9bit adder input. Zero extended to 9bit implicitly. 
-        twosComplement(x).io.input := io.Rs2((x*8+7) , (x*8+0))
+        twosComplement(x).io.input := Cat(0.U, io.Rs2((x*8+7) , (x*8+0)))
         UA8(x).io.b                := twosComplement(x).io.output
     }
 
@@ -306,7 +305,7 @@ class PSSUBB extends Module{
     for (x <- 0 until 4) {
         SA8(x).io.cin              := 0.U
         SA8(x).io.a                := io.Rs1((x*8+7) , (x*8+0)).asSInt    // 8bit element from Rs1 assigned to 9bit UInt Input port. Zero extended to 9bits.
-        twosComplement(x).io.input := io.Rs2((x*8+7) , (x*8+0))
+        twosComplement(x).io.input := Cat(io.Rs2(x*8+7) , io.Rs2((x*8+7) , (x*8+0)))
         SA8(x).io.b                := (twosComplement(x).io.output).asSInt
 
         when((SA8(x).io.sum).asSInt < -128.S) {    // 
@@ -316,7 +315,7 @@ class PSSUBB extends Module{
             sWire(x) := 127.S
             vxsatOV  := 1.U 
         }.otherwise{
-            sWire(x) := SA8(x).io.sum(7,0)      //else get the sum 
+            sWire(x) := (SA8(x).io.sum(7,0)).asSInt      //else get the sum 
         }
     }
 
@@ -341,15 +340,15 @@ class PSSUBUB extends Module{
     val sWire          = Wire(Vec(4, UInt(8.W)))
 
     for (x <- 0 until 4) {
-        UA8(x).io.cin           := 0.U
-        UA8(x).io.a             := io.Rs1((x*8+7) , (x*8+0))    // 8bit element from Rs1 assigned to 9bit UInt Input port. Zero extended to 9bits.
-        twosComplement(x).io.input := io.Rs2((x*8+7) , (x*8+0))
-        UA8(x).io.b             := twosComplement(x).io.output    // 8bit element from Rs2 assigned to 9bit UInt Input port. Zero extended to 9bits.
+        UA8(x).io.cin              := 0.U
+        UA8(x).io.a                := io.Rs1((x*8+7) , (x*8+0))    // 8bit element from Rs1 assigned to 9bit UInt Input port. Zero extended to 9bits.
+        twosComplement(x).io.input := Cat(0.U , io.Rs2((x*8+7) , (x*8+0)))
+        UA8(x).io.b                := twosComplement(x).io.output    // 9bit element from Rs2 assigned to 9bit UInt Input port. Zero extended to 9bits.
        
-        // Overflow will not occur in Unsigned Subtraction though but specs mentions it.
-        when(UA8(x).io.sum(8) === 1.U) {    // if 9th bit of sum output i.e., Carryout bit is 1
-            sWire(x) := 255.U       // saturate the result
-            vxsatOV  := 1.U 
+        // Overflow occurs when result is less than zero
+        when((UA8(x).io.sum).asSInt < 0.S) {    // Result is in 2'complement. Comparing in Signed form  
+            sWire(x) := 0.U       // Saturate the result
+            vxsatOV  := 1.U       // Set OV flag
         }.otherwise {
             sWire(x) := UA8(x).io.sum(7,0)      //else get the sum 
         }
