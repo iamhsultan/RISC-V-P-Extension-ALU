@@ -1,3 +1,5 @@
+package Bits8
+
 import chisel3._
 import chisel3.util._
 
@@ -77,9 +79,9 @@ class PADDB extends Module {
 */
 class PAADDB extends Module {
     val io = IO(new Bundle{
-        val Rs1   = Input(SInt(32.W))
-        val Rs2   = Input(SInt(32.W))
-        val Rd    = Output(SInt(32.W))
+        val Rs1   = Input(UInt(32.W))
+        val Rs2   = Input(UInt(32.W))
+        val Rd    = Output(UInt(32.W))
         val vxsat = Output(UInt(1.W))       // vxsat CSR has OV information in LSB. vxsat[XLEN,1] bits are reserved.
     })
 
@@ -100,7 +102,7 @@ class PAADDB extends Module {
         // shiftsum(x)(7,0) := A8(x).io.s(8,1)    // right shift signed-sum-result by 1. Bit8 to Bit1 assigned to lower 8 bits of wire sumshift
     }
     // io.Rd := Cat(shiftsum(3)(7,0), shiftsum(2)(7,0), shiftsum(1)(7,0), shiftsum(0)(7,0))   // concatenate the wires to form rd
-    io.Rd := (Cat(SA8(3).io.sum(8,1), SA8(2).io.sum(8,1), SA8(1).io.sum(8,1), SA8(0).io.sum(8,1))).asSInt
+    io.Rd := Cat(SA8(3).io.sum(8,1), SA8(2).io.sum(8,1), SA8(1).io.sum(8,1), SA8(0).io.sum(8,1))
     /* - Extraction of upper 8 bits out of total 9bit result takes care of the shift arithmetic right operation.
        - Converting to asSInt is for testing the case of signed decimal input ( eg -8 + (-2) = -5 ) in tester.
     */
@@ -241,9 +243,9 @@ class PSUBB extends Module {
 //======================================PASUB.B -- SIMD 8Bit Signed Averaging Subtraction=================================///
 class PASUBB extends Module {
     val io = IO(new Bundle {
-        val Rs1   = Input(SInt(32.W))
-        val Rs2   = Input(SInt(32.W))
-        val Rd    = Output(SInt(32.W))
+        val Rs1   = Input(UInt(32.W))
+        val Rs2   = Input(UInt(32.W))
+        val Rd    = Output(UInt(32.W))
         val vxsat = Output(UInt(1.W))
     })
 
@@ -259,7 +261,7 @@ class PASUBB extends Module {
         twosComplement(x).io.input  := Cat(io.Rs2(x*8+7) , io.Rs2((x*8+7) , (x*8+0)))
         SA8(x).io.b                 := (twosComplement(x).io.output).asSInt
     }
-    io.Rd   := Cat(SA8(3).io.sum(8,1) , SA8(2).io.sum(8,1) , SA8(1).io.sum(8,1) , SA8(0).io.sum(8,1)).asSInt
+    io.Rd   := Cat(SA8(3).io.sum(8,1) , SA8(2).io.sum(8,1) , SA8(1).io.sum(8,1) , SA8(0).io.sum(8,1))
     io.vxsat := vxsatOV
 }
 //======================================PASUBU.B -- SIMD 8Bit Unsigned Averaging Subtraction=================================///
@@ -290,9 +292,9 @@ class PASUBUB extends Module {
 //======================================PSSUB.B -- SIMD 8Bit Signed Saturating Subtraction=================================///
 class PSSUBB extends Module{
     val io = IO(new Bundle {
-        val Rs1   = Input(SInt(32.W))
-        val Rs2   = Input(SInt(32.W))
-        val Rd    = Output(SInt(32.W))
+        val Rs1   = Input(UInt(32.W))
+        val Rs2   = Input(UInt(32.W))
+        val Rd    = Output(UInt(32.W))
         val vxsat = Output(UInt(1.W))       // vxsat CSR has OV information in LSB. vxsat[XLEN,1] bits are reserved.
     })
 
@@ -319,7 +321,7 @@ class PSSUBB extends Module{
         }
     }
 
-    io.Rd    := (Cat(sWire(3), sWire(2), sWire(1), sWire(0))).asSInt    // Concatenate the result into a 32bit word.  // REMOVE THE asSInt LATER
+    io.Rd    := Cat(sWire(3), sWire(2), sWire(1), sWire(0))    // Concatenate the result into a 32bit word.  // REMOVE THE asSInt LATER
     io.vxsat := vxsatOV
 }
 
