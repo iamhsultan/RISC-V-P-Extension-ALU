@@ -6,7 +6,7 @@ import chisel3.util._
 
 // Defining ALU operations as enumeration type using ChiselEnum
 object ALUops extends ChiselEnum {
-    val PADDB , PAADDB , PAADDUB , PADDW , PSADDUB , PSUBB , PASUBB , PASUBUB , PSSUBB , PSSUBUB = Value
+    val PADDB,PAADDB,PAADDUB,PADDW,PSADDUB , PSUBB,PASUBB,PASUBUB,PSSUBB,PSSUBUB , PADDH,PAADDH,PAADDUH,PSADDH,PSADDUH  = Value
 }
 
 //================================
@@ -238,10 +238,185 @@ class PextALU extends Module {
         }
         io.Rd    := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
         io.vxsat := vxsatOV  // Overflow flag 
-    }
+        
+        //====================================================16 Bit Operations====================================================// 
     
-}
+    //==============================
+    //PADD.H -- SIMD 16-bit Addition
+    //==============================
+    }.elsewhen(io.operation === ALUops.PADDH) {
+        // Adder 0
+        fourByteAdder.io.a(0)       := io.Rs1(7 , 0)
+        fourByteAdder.io.b(0)       := io.Rs2(7 , 0)
+        fourByteAdder.io.carryIn(0) := 0.U
+        sumWires(0)                 := fourByteAdder.io.sum(0)
+        // Adder 1
+        fourByteAdder.io.a(1)       := io.Rs1(15 , 8)
+        fourByteAdder.io.b(1)       := io.Rs2(15 , 8)
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)
+        sumWires(1)                 := fourByteAdder.io.sum(1)
+        //Adder 2
+        fourByteAdder.io.a(2)       := io.Rs1(23 , 16)
+        fourByteAdder.io.b(2)       := io.Rs2(23 , 16)
+        fourByteAdder.io.carryIn(2) := 0.U  
+        sumWires(2)                 := fourByteAdder.io.sum(2)
+        // Adder 3
+        fourByteAdder.io.a(3)       := io.Rs1(31 , 24)
+        fourByteAdder.io.b(3)       := io.Rs2(31 , 24)
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
+        sumWires(3)                 := fourByteAdder.io.sum(3)
 
+        io.Rd := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
+    
+    //================================================
+    //PAADD.H -- SIMD 16-bit Signed Averaging Addition
+    //================================================    
+    }.elsewhen(io.operation === ALUops.PAADDH) {
+        // Adder 0
+        fourByteAdder.io.a(0)       := io.Rs1(7 , 0)
+        fourByteAdder.io.b(0)       := io.Rs2(7 , 0)
+        fourByteAdder.io.carryIn(0) := 0.U
+        sumWires(0)                 := fourByteAdder.io.sum(0)       
+        // Adder 1
+        fourByteAdder.io.a(1)       := Cat(io.Rs1(15) , io.Rs1(15 , 8))
+        fourByteAdder.io.b(1)       := Cat(io.Rs2(15) , io.Rs2(15 , 8))
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)
+        sumWires(1)                 := fourByteAdder.io.sum(1)
+        // Adder 2
+        fourByteAdder.io.a(2)       := io.Rs1(23 , 16)
+        fourByteAdder.io.b(2)       := io.Rs2(23 , 16)
+        fourByteAdder.io.carryIn(2) := 0.U
+        sumWires(2)                 := fourByteAdder.io.sum(2)       
+        // Adder 3
+        fourByteAdder.io.a(3)       := Cat(io.Rs1(31) , io.Rs1(31 , 24))
+        fourByteAdder.io.b(3)       := Cat(io.Rs2(31) , io.Rs2(31 , 24))
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
+        sumWires(3)                 := fourByteAdder.io.sum(3)
+
+        io.Rd := Cat(sumWires(3)(8,0) , sumWires(2)(7,1) , sumWires(1)(8,0) , sumWires(0)(7,1))
+
+    //===================================================
+    //PAADDU.H -- SIMD 16-bit Unsigned Averaging Addition
+    //===================================================
+    }.elsewhen(io.operation === ALUops.PAADDUH) {
+        // Adder 0
+        fourByteAdder.io.a(0)       := io.Rs1(7 , 0)
+        fourByteAdder.io.b(0)       := io.Rs2(7 , 0)
+        fourByteAdder.io.carryIn(0) := 0.U
+        sumWires(0)                 := fourByteAdder.io.sum(0)
+        // Adder 1
+        fourByteAdder.io.a(1)       := Cat(0.U , io.Rs1(15 , 8))
+        fourByteAdder.io.b(1)       := Cat(0.U , io.Rs2(15 , 8))
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)
+        sumWires(1)                 := fourByteAdder.io.sum(1)
+        // Adder 2
+        fourByteAdder.io.a(2)       := io.Rs1(23 , 16)
+        fourByteAdder.io.b(2)       := io.Rs2(23 , 16)
+        fourByteAdder.io.carryIn(2) := 0.U
+        sumWires(2)                 := fourByteAdder.io.sum(2)
+        // Adder 3
+        fourByteAdder.io.a(3)       := Cat(0.U , io.Rs1(31 , 24))
+        fourByteAdder.io.b(3)       := Cat(0.U , io.Rs2(31 , 24))
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
+        sumWires(3)                 := fourByteAdder.io.sum(3)
+
+        io.Rd := Cat(sumWires(3)(8,0) , sumWires(2)(7,1) , sumWires(1)(8,0) , sumWires(0)(7,1))
+
+    //===================================================
+    //PSADD.H -- SIMD 16-bit Signed Saturating Addition
+    //===================================================    
+    }.elsewhen(io.operation === ALUops.PSADDH) {
+        // Adder 0
+        fourByteAdder.io.a(0)       := io.Rs1(7 , 0)
+        fourByteAdder.io.b(0)       := io.Rs2(7 , 0)
+        fourByteAdder.io.carryIn(0) := 0.U
+        // Adder 1
+        fourByteAdder.io.a(1)       := Cat(io.Rs1(15) , io.Rs1(15 , 8))
+        fourByteAdder.io.b(1)       := Cat(io.Rs2(15) , io.Rs2(15 , 8))
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)
+        // Adder 2
+        fourByteAdder.io.a(2)       := io.Rs1(23 , 16)
+        fourByteAdder.io.b(2)       := io.Rs2(23 , 16)
+        fourByteAdder.io.carryIn(2) := 0.U
+        // Adder 3
+        fourByteAdder.io.a(3)       := Cat(io.Rs1(31) , io.Rs1(31 , 24))
+        fourByteAdder.io.b(3)       := Cat(io.Rs2(31) , io.Rs2(31 , 24))
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
+
+        when((fourByteAdder.io.sum(1)).asSInt < -128.S) { 
+            sumWires(0) := (-128.S(9.W)).asUInt       // saturate the result
+            sumWires(1) := (-128.S(9.W)).asUInt
+            vxsatOV     := 1.U // Rewrite the overflow information code
+        }.elsewhen((fourByteAdder.io.sum(1)).asSInt > 127.S) {
+            sumWires(0) := (127.S(9.W)).asUInt
+            sumWires(1) := (127.S(9.W)).asUInt
+            vxsatOV     := 1.U  // Rewrite the overflow information code
+        }.otherwise {
+            sumWires(0)  := fourByteAdder.io.sum(0)
+            sumWires(1)  := fourByteAdder.io.sum(1)
+        }
+ 
+        when((fourByteAdder.io.sum(3)).asSInt < -128.S) {
+            sumWires(2) := (127.S(9.W)).asUInt
+            sumWires(3) := (127.S(9.W)).asUInt
+        }.elsewhen((fourByteAdder.io.sum(3)).asSInt > 127.S) {
+            sumWires(2) := (127.S(9.W)).asUInt
+            sumWires(3) := (127.S(9.W)).asUInt
+            vxsatOV     := 1.U  // Rewrite the overflow information code
+        }.otherwise {
+            sumWires(0)  := fourByteAdder.io.sum(0)
+            sumWires(1)  := fourByteAdder.io.sum(1)
+        }
+
+        io.Rd := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
+    
+    //====================================================
+    //PSADDU.H -- SIMD 16-bit Unsigned Saturating Addition
+    //====================================================
+    }.elsewhen(io.operation === ALUops.PSADDUH) {
+        // Adder 0
+        fourByteAdder.io.a(0)       := io.Rs1(7 , 0)
+        fourByteAdder.io.b(0)       := io.Rs2(7 , 0)
+        fourByteAdder.io.carryIn(0) := 0.U
+        // Adder 1
+        fourByteAdder.io.a(1)       := Cat(0.U , io.Rs1(15 , 8))
+        fourByteAdder.io.b(1)       := Cat(0.U , io.Rs2(15 , 8))
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)
+        // Adder 2
+        fourByteAdder.io.a(2)       := io.Rs1(23 , 16)
+        fourByteAdder.io.b(2)       := io.Rs2(23 , 16)
+        fourByteAdder.io.carryIn(2) := 0.U
+        // Adder 3
+        fourByteAdder.io.a(3)       := Cat(0.U , io.Rs1(31 , 24))
+        fourByteAdder.io.b(3)       := Cat(0.U , io.Rs2(31 , 24))
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
+
+        when(fourByteAdder.io.sum(1)(8) === 1.U) {
+            sumWires(0) := 255.U
+            sumWires(1) := 255.U
+            vxsatOV     := 1.U  // Rewrite the overflow information
+        }.otherwise {
+            sumWires(0) := fourByteAdder.io.sum(0)
+            sumWires(1) := fourByteAdder.io.sum(1)
+        }
+
+        when(fourByteAdder.io.sum(3)(8) === 1.U) {
+            sumWires(2) := 255.U
+            sumWires(3) := 255.U
+            vxsatOV     := 1.U  // Rewrite the overflow information
+        }.otherwise {
+            sumWires(2) := fourByteAdder.io.sum(0)
+            sumWires(3) := fourByteAdder.io.sum(1)
+        } 
+        
+        io.Rd := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
+    
+    //===================================
+    //PSUB.H -- SIMD 16-bit Subtraction
+    //===================================
+    }
+}
+ 
 object ALUMain extends App {
   (new chisel3.stage.ChiselStage).emitVerilog(new PextALU(), Array("--target-dir", "generated"))
 }
