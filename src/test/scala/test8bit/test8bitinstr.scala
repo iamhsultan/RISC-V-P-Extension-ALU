@@ -215,7 +215,7 @@ class PSSUBBTester extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 }
-///============================TESTER====PASUBU.B -- SIMD 8-bit Unsigned Averaging Subtraction=========================///
+///============================TESTER====PSSUBU.B -- SIMD 8-bit Unsigned Saturating Subtraction=========================///
 class PSSUBUBTester extends AnyFlatSpec with ChiselScalatestTester {
   "PSSUBUB" should "correctly compute 8bit Unsigned Saturating Subtraction" in {
     test(new PSSUBUB) { dut =>
