@@ -257,9 +257,99 @@ class PextALUWrapperTester extends AnyFlatSpec with ChiselScalatestTester {
         // vxsat = 0x00000001 (Saturation occurred)
         (ALUops.PSSUBUH, "h1234ABCD".U, "h5678DCBA".U, "h00000000".U, "h00000001".U),
 
+        //=======================================================
+        //PAS.HX -- SIMD 16-bit Cross Addition & Subtraction
+        //=======================================================
+        // Rs1 = 0x7A5B_6A5C -> [0x7A5B (31323), 0x6A5C (27228)]
+        // Rs2 = 0x1357_2468 -> [0x1357 (4951), 0x2468 (9320)]
+        // Cross Addition:    [0x7A5B (31323)] + [0x2468 (9320)]  = 0x9EC3 (40643)
+        // Cross Subtraction: [0x6A5C (27228)] - [0x1357 (4951)]  = 0x5705 (22277)
+        // Expected Rd = 0x9EC3_56F5 -> [0x9EC3 (40643), 0x5705 (22277)]
+        // vxsat = 0x00000000 (No saturation occurred)
+        (ALUops.PASHX, "h7A5B_6A5C".U, "h1357_2468".U, "h9EC3_5705".U, "h00000001".U),        // Status register is preserved
 
-          
+        //====================================================================
+        //PAAS.HX -- SIMD 16-bit Signed Averaging Cross Addition & Subtraction
+        //====================================================================
+        // Rs1 = 0x7A5B_6A5C -> [0x7A5B (31323), 0x6A5C (27228)]
+        // Rs2 = 0x1357_2468 -> [0x1357 (4951), 0x2468 (9320)]
+        // Cross Averaging Addition:    ([0x7A5B (31323)] + [0x2468 (9320)]) >> 1 = 0x4F61 (20321)
+        // Cross Averaging Subtraction: ([0x6A5C (27228)] - [0x1357 (4951)]) >> 1 = 0x2B82 (11138)
+        // Expected Rd = 0x4F61_2B82 -> [0x4F61 (20321), 0x2B82 (11138)]
+        // vxsat = 0x00000000 (No saturation occurred)
+        (ALUops.PAASHX, "h7A5B_6A5C".U, "h1357_2468".U, "h4F61_2B82".U, "h00000001".U),     // Status register is preserved
+        // Rs1 = 0x7FFF_8000 -> [0x7FFF (+32767), 0x8000 (-32768)]
+        // Rs2 = 0x7FFF_7FFF -> [0x7FFF (+32767), 0x7FFF (+32767)]
+        // Cross Averaging Addition:    ([0x7FFF (+32767)] + [0x7FFF (+32767)]) >> 1 = 0x7FFF (+32767)
+        // Cross Averaging Subtraction: ([0x8000 (-32768)] - [0x7FFF (+32767)]) >> 1 = 0x8000 (-32768)
+        // Expected Rd = 0x7FFF_8000 -> [0x7FFF (+32767), 0x8000 (-32768)]
+        // vxsat = 0x00000000 (No saturation occurred)
+        (ALUops.PAASHX, "h7FFF_8000".U, "h7FFF_7FFF".U, "h7FFF_8000".U, "h00000001".U),     // Status register is preserved
+        // Rs1 = 0x8000_8000 -> [0x8000 (-32768), 0x8000 (-32768)]
+        // Rs2 = 0x4000_8000 -> [0x4000 (+16384), 0x8000 (-32768)]
+        // Cross Averaging Addition:    ([0x8000 (-32768)] + [0x8000 (-32768)]) >> 1 = 0x8000 (-32768)
+        // Cross Averaging Subtraction: ([0x8000 (-32768)] - [0x4000 (+16384)]) >> 1 = 0xA000 (-24576)
+        // Expected Rd = 0xC000_A000 -> [0xC000 (-16384), 0xA000 (-24576)]
+        // vxsat = 0x00000000 (No saturation occurred)
+        (ALUops.PAASHX, "h8000_8000".U, "h4000_8000".U, "h8000_A000".U, "h00000001".U),     // Status register is preserved
 
+        //======================================================================
+        //PSAS.HX -- SIMD 16-bit Signed Saturating Cross Addition & Subtraction
+        //======================================================================
+        // vxsat = 0x00000000 (No saturation occurred)
+        (ALUops.PSASHX, "h1A5B_6A5C".U, "h2357_2468".U, "h3EC3_4705".U, "h00000000".U),    // Status updates to 0
+        // Rs1 = 0x7FFF_8000 -> [0x7FFF (+32767), 0x8000 (-32768)]
+        // Rs2 = 0x7FFF_0001 -> [0x7FFF (+32767), 0x0001 (+1)]
+        // Cross Addition:    [0x7FFF (+32767)] + [0x0001 (+1)] = 0x8000 (32768) -> Saturated to 0x7FFF (32767)
+        // Cross Subtraction: [0x8000 (-32768)] - [0x7FFF (+32767)] = 0xFFFF8001 (-65535) -> Saturated to 0x8000 (-32768)
+        // Expected Rd = 0x7FFF_8000 -> [0x7FFF (32767), 0x8000 (-32768)]
+        // vxsat = 0x00000001 (Overflow occurred for both addition and subtraction)
+        (ALUops.PSASHX, "h7FFF_8000".U, "h7FFF_0001".U, "h7FFF_8000".U, "h00000001".U),   // Status updates to 1
+
+        //======================================
+        //PSA.HX -- SIMD 16-bit Cross Sub & Add
+        //======================================
+        // Rs1 = 0x6A5C_7A5B -> [0x6A5C (27228), 0x7A5B (31323)]
+        // Rs2 = 0x2468_1357 -> [0x2468 (9320), 0x1357 (4951)]
+        // Cross Subtraction: [0x6A5C (27228)] - [0x1357 (4951)] = 0x5705 (22277)
+        // Cross Addition:    [0x7A5B (31323)] + [0x2468 (9320)] = 0x9EC3 (40643)
+        // Expected Rd = 0x5705_9EC3 -> [0x5705 (22277), 0x9EC3 (40643)]
+        // vxsat = 0x00000000 (No saturation occurred)
+        (ALUops.PSAHX, "h6A5C_7A5B".U, "h2468_1357".U, "h57059EC3".U, "h00000001".U),     // Status reg preserves previous state
+
+        //====================================================================
+        //PASA.HX -- SIMD 16-bit Signed Averaging Cross Subtraction & Addition
+        //====================================================================
+        // Rs1 = 0x6A5C_7A5B -> [0x6A5C (27228), 0x7A5B (31323)]
+        // Rs2 = 0x2468_1357 -> [0x2468 (9320), 0x1357 (4951)]
+        // Cross Averaging Subtraction: ([0x6A5C (27228)] - [0x1357 (4951)]) >> 1 = 0x2B82 (11138)
+        // Cross Averaging Addition:    ([0x7A5B (31323)] + [0x2468 (9320)]) >> 1 = 0x4F61 (20321)
+        // Expected Rd = 0x2B82_4F61 -> [0x2B82 (11138), 0x4F61 (20321)]
+        // vxsat = 0x00000000 (No saturation occurred)
+        (ALUops.PASAHX, "h6A5C_7A5B".U, "h2468_1357".U, "h2B82_4F61".U, "h00000001".U), // Status reg preserves previous state
+        // vxsat = 0x00000000 (No saturation occurred)
+        (ALUops.PASAHX, "h8000_7FFF".U, "h7FFF_7FFF".U, "h8000_7FFF".U, "h00000001".U),   // Status reg preserves previous state
+        // vxsat = 0x00000000 (No saturation occurred)
+        (ALUops.PASAHX, "h8000_8000".U, "h8000_4000".U, "hA000_8000".U, "h00000001".U),   // Status reg preserves previous state
+
+        //======================================================================
+        //PSSA.HX -- SIMD 16-bit Signed Saturating Cross Subtraction & Addition
+        //======================================================================
+        // Rs1 = 0x6A5C_1A5B -> [0x6A5C (27228), 0x1A5B (6747)]
+        // Rs2 = 0x2468_2357 -> [0x2468 (9320), 0x2357 (9047)]
+        // Cross Subtraction: ([0x6A5C (27228)] - [0x2357 (9047)]) = 0x4705 (18181) -> No Saturation
+        // Cross Addition:    ([0x1A5B (6747)] + [0x2468 (9320)]) = 0x3EC3 (16067) -> No Saturation
+        // Expected Rd = 0x4705_3EC3 -> [0x4705 (18181), 0x3EC3 (16067)]
+        // vxsat = 0x00000000 (No saturation occurred)
+        (ALUops.PSSAHX, "h6A5C_1A5B".U, "h2468_2357".U, "h4705_3EC3".U, "h00000000".U),   // Status reg updates to 0
+        // SIMD 16-bit Signed Saturating Cross Subtraction & Addition
+        // Rs1 = 0x8000_7FFF -> [0x8000 (-32768), 0x7FFF (+32767)]
+        // Rs2 = 0x7FFF_0001 -> [0x7FFF (+32767), 0x0001 (+1)]
+        // Cross Subtraction: ([0x8000 (-32768)] - [0x0001 (+1)]) = 0xFFFF7FFF (-32769) -> Saturated to 0x8000 (-32768)
+        // Cross Addition:    ([0x7FFF (+32767)] + [0x7FFF (+32767)]) = 0xFFFF (65534) -> Saturated to 0x7FFF (32767)
+        // Expected Rd = 0x8000_7FFF -> [0x8000 (-32768), 0x7FFF (32767)]
+        // vxsat = 0x00000001 (Saturation occurred for both addition and subtraction)
+        (ALUops.PSSAHX, "h8000_7FFF".U, "h7FFF_0001".U, "h8000_7FFF".U, "h00000001".U),
 
 
 

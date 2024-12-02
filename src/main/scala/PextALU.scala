@@ -3,10 +3,11 @@ import chisel3.util._
 //import Bits8._
 //import scala.annotation.switch
 //import chisel3.experimental.ChiselEnum
+import scala.math._
 
 // Defining ALU operations as enumeration type using ChiselEnum
 object ALUops extends ChiselEnum {
-    val PADDB,PAADDB,PAADDUB,PSADDUB , PSUBB,PASUBB,PASUBUB,PSSUBB,PSSUBUB , PADDH,PAADDH,PAADDUH,PSADDH,PSADDUH , PSUBH,PASUBH,PASUBUH,PSSUBH,PSSUBUH, PASHX,PAASHX,PSASHX,PSAHX,PASAHX,PSSAHX  = Value
+    val PADDB,PAADDB,PAADDUB,PSADDUB , PSUBB,PASUBB,PASUBUB,PSSUBB,PSSUBUB , PADDH,PAADDH,PAADDUH,PSADDH,PSADDUH , PSUBH,PASUBH,PASUBUH,PSSUBH,PSSUBUH , PASHX,PAASHX,PSASHX,PSAHX,PASAHX,PSSAHX , PMSEQH,PMSLTH,PMSLTUH,PMSLEH,PMSLEUH , PMINH,PMINUH,PMAXH,PMAXUH , PCLIPH = Value
 }
 
 //================================
@@ -88,6 +89,8 @@ class PextALU extends Module {
     val twosComplement   = Module(new TwosComplementGenerator())
     val sumWires         = Wire(Vec(4, UInt(9.W))) 
     val overflowDetected = VecInit(Seq.fill(4)(WireDefault(false.B)))   // A vector of 4 wires to capture overflow info from four adders. Default value is 0
+    val lowerHalf        = WireDefault(0.U(16.W))       // Half Word wires for compare operations. 
+    val upperHalf        = WireDefault(0.U(16.W))       
 
     // Default values
     fourByteAdder.io.a         := VecInit(Seq.fill(4)(0.U(9.W)))
@@ -908,7 +911,139 @@ class PextALU extends Module {
         io.Rd        := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
         io.vxsat_out := Cat(io.vxsat_in(31, 1) , overflowDetected(0) | overflowDetected(1) | overflowDetected(2) | overflowDetected(3)) 
     
+    //==================================COMPARE INSTRUCTIONS====================================//
+    //=============================================
+    //PMSEQ.H -- SIMD 16-bit Integer Compare Equal
+    //=============================================
+    }.elsewhen(io.operation === ALUops.PMSEQH) {      
+        lowerHalf := Mux(io.Rs1(15 ,  0) === io.Rs2(15 ,  0) , "hFFFF".U(16.W), 0.U(16.W))
+        upperHalf := Mux(io.Rs1(31 , 16) === io.Rs2(31 , 16) , "hFFFF".U(16.W), 0.U(16.W))
+
+        io.Rd        := Cat(upperHalf , lowerHalf)
+        io.vxsat_out := io.vxsat_in
+    
+    //================================================
+    //PMSLT.H -- SIMD 16-bit Signed Compare Less Than
+    //================================================
+    }.elsewhen(io.operation === ALUops.PMSLTH) {
+        lowerHalf := Mux((io.Rs1(15 ,  0)).asSInt < (io.Rs2(15 ,  0)).asSInt , "hFFFF".U(16.W), 0.U(16.W))
+        upperHalf := Mux((io.Rs1(31 , 16)).asSInt < (io.Rs2(31 , 16)).asSInt , "hFFFF".U(16.W), 0.U(16.W))
+
+        io.Rd        := Cat(upperHalf , lowerHalf)
+        io.vxsat_out := io.vxsat_in
+    
+    //==================================================
+    //PMSLTU.H -- SIMD 16-bit Unsigned Compare Less Than
+    //==================================================
+    }.elsewhen(io.operation === ALUops.PMSLTUH) {
+        lowerHalf := Mux(io.Rs1(15 ,  0) < io.Rs2(15 ,  0) , "hFFFF".U(16.W), 0.U(16.W))
+        upperHalf := Mux(io.Rs1(31 , 16) < io.Rs2(31 , 16) , "hFFFF".U(16.W), 0.U(16.W))
+
+        io.Rd        := Cat(upperHalf , lowerHalf)
+        io.vxsat_out := io.vxsat_in
+    
+    //===========================================================
+    //PMSLE.H -- SIMD 16-bit Signed Compare Less Than or Equal         Possible nomenclature error in the specification
+    //===========================================================
+    }.elsewhen(io.operation === ALUops.PMSLEH) {
+        lowerHalf := Mux((io.Rs1(15 ,  0)).asSInt <= (io.Rs2(15 ,  0)).asSInt , "hFFFF".U(16.W), 0.U(16.W))
+        upperHalf := Mux((io.Rs1(31 , 16)).asSInt <= (io.Rs2(31 , 16)).asSInt , "hFFFF".U(16.W), 0.U(16.W))
+
+        io.Rd        := Cat(upperHalf , lowerHalf)
+        io.vxsat_out := io.vxsat_in
+    
+    //===========================================================
+    //PMSLEU.H -- SIMD 16-bit Unsigned Compare Less Than & Equal       Possible nomenclature error in the specification
+    //===========================================================
+    }.elsewhen(io.operation === ALUops.PMSLEUH) {
+        lowerHalf := Mux(io.Rs1(15 ,  0) <= io.Rs2(15 ,  0) , "hFFFF".U(16.W), 0.U(16.W))
+        upperHalf := Mux(io.Rs1(31 , 16) <= io.Rs2(31 , 16) , "hFFFF".U(16.W), 0.U(16.W))
+
+        io.Rd        := Cat(upperHalf , lowerHalf)
+        io.vxsat_out := io.vxsat_in
+    
+    //======================================
+    //PMIN.H -- SIMD 16-bit Signed Minimum
+    //======================================
+    }.elsewhen(io.operation === ALUops.PMINH) {
+        lowerHalf := Mux((io.Rs1(15,0)).asSInt  < (io.Rs2(15,0)).asSInt  , io.Rs1(15,0) , io.Rs2(15,0))
+        upperHalf := Mux((io.Rs1(31,16)).asSInt < (io.Rs2(31,16)).asSInt , io.Rs1(31,16), io.Rs2(31,16))
+
+        io.Rd        := Cat(upperHalf , lowerHalf)
+        io.vxsat_out := io.vxsat_in
+    
+    //======================================
+    //PMINU.H -- SIMD 16-bit Unsigned Minimum
+    //======================================
+    }.elsewhen(io.operation === ALUops.PMINUH) {
+        lowerHalf := Mux(io.Rs1(15,0)  < io.Rs2(15,0)  , io.Rs1(15,0) , io.Rs2(15,0))
+        upperHalf := Mux(io.Rs1(31,16) < io.Rs2(31,16) , io.Rs1(31,16), io.Rs2(31,16))
+
+        io.Rd        := Cat(upperHalf , lowerHalf)
+        io.vxsat_out := io.vxsat_in
+    
+    //=======================================
+    //PMAX.H -- SIMD 16-bit Signed Maximum
+    //=======================================
+    }.elsewhen(io.operation === ALUops.PMAXH) {
+        lowerHalf := Mux((io.Rs1(15,0)).asSInt  > (io.Rs2(15,0)).asSInt  , io.Rs1(15,0) , io.Rs2(15,0))
+        upperHalf := Mux((io.Rs1(31,16)).asSInt > (io.Rs2(31,16)).asSInt , io.Rs1(31,16), io.Rs2(31,16))
+
+        io.Rd        := Cat(upperHalf , lowerHalf)
+        io.vxsat_out := io.vxsat_in
+    
+    //=======================================
+    //PMAXU.H -- SIMD 16-bit Unsigned Maximum
+    //=======================================
+    }.elsewhen(io.operation === ALUops.PMAXUH) {
+        lowerHalf := Mux(io.Rs1(15,0)  > io.Rs2(15,0)  , io.Rs1(15,0) , io.Rs2(15,0))
+        upperHalf := Mux(io.Rs1(31,16) > io.Rs2(31,16) , io.Rs1(31,16), io.Rs2(31,16))
+
+        io.Rd        := Cat(upperHalf , lowerHalf)
+        io.vxsat_out := io.vxsat_in
+    
+    //========================================
+    //PCLIP.H -- SIMD 16-bit Signed Clip Value      Greyed out on the specification. Operation enum value is chosen based on the naming logic derived from previous non-greyed instruction.
+    //========================================
+    }.elsewhen(io.operation === ALUops.PCLIPH) {
+        val imm4u      = (io.Rs2(3,0)).asUInt       // Decoder extracts and sends in the immediate value at Rs2 input port, padded to 32 bits.
+        val upperLimit = (1.U << imm4u) - 1.U
+        val lowerLimit = -(1.S << imm4u).asUInt
+        val clipLower  = WireDefault(0.S(16.W))
+        val clipUpper  = WireDefault(0.S(16.W))
+        
+
+        when((io.Rs1(15,0)).asSInt > upperLimit.asSInt) {
+            clipLower           := upperLimit.asSInt
+            overflowDetected(1) := true.B
+        }.elsewhen((io.Rs1(15,0)).asSInt < lowerLimit.asSInt) {
+            clipLower           := lowerLimit.asSInt
+            overflowDetected(1) := true.B
+        }.otherwise {
+            clipLower           := io.Rs1(15,0).asSInt
+            overflowDetected(1) := false.B
+        }
+
+        when((io.Rs1(31,16)).asSInt > upperLimit.asSInt) {
+            clipUpper           := upperLimit.asSInt
+            overflowDetected(3) := true.B
+        }.elsewhen((io.Rs1(31,16)).asSInt < lowerLimit.asSInt) {
+            clipUpper           := lowerLimit.asSInt
+            overflowDetected(3) := true.B
+        }.otherwise {
+            clipUpper           := io.Rs1(31,16).asSInt
+            overflowDetected(3) := false.B
+        }
+
+        io.Rd := Cat(clipUpper , clipLower)
+        io.vxsat_out := Cat(io.vxsat_in(31,1) ,  overflowDetected(1) | overflowDetected(3))  
+
+    //==========================================
+    //PCLIPU.H -- SIMD 16-bit Unsigned Clip Value      Greyed out on the specification. Operation enum value is chosen based on the naming logic derived from previous non-greyed instruction.
+    //==========================================
     }
+
+    
 }
  
 object ALUMain extends App {
