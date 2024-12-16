@@ -2,6 +2,39 @@ import chisel3._
 import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 
+//===============================
+// Wrapper Module for ALU Testing
+//===============================
+class PextALUWrapper extends Module {
+  val io = IO(new Bundle {
+    val Rs1       = Input(UInt(32.W))
+    val Rs2       = Input(UInt(32.W))
+    val operation = Input(ALUops())
+    val Rd        = Output(UInt(32.W))
+    val vxsat     = Output(UInt(32.W))
+  })
+
+  // Simulated vxsat register (32-bit)
+  val vxsat = RegInit(0.U(32.W))     // Default value is 0
+  vxsat := 0.U
+
+
+  // Instantiate the ALU
+  val alu = Module(new PextALU)
+
+  // Connections to the ALU
+  alu.io.Rs1 := io.Rs1
+  alu.io.Rs2 := io.Rs2
+  alu.io.operation := io.operation
+  alu.io.vxsat_in := vxsat
+
+  io.Rd := alu.io.Rd
+
+  // Update the simulated vxsat register
+  vxsat := alu.io.vxsat_out
+
+  io.vxsat := vxsat
+}
 
 class PextALUWrapperTester extends AnyFlatSpec with ChiselScalatestTester {
 
@@ -351,21 +384,145 @@ class PextALUWrapperTester extends AnyFlatSpec with ChiselScalatestTester {
         // vxsat = 0x00000001 (Saturation occurred for both addition and subtraction)
         (ALUops.PSSAHX, "h8000_7FFF".U, "h7FFF_0001".U, "h8000_7FFF".U, "h00000001".U),
 
+        //===================================================COMPARE INSTRUCTIONS=======================================================//
+        //=============================================
+        //PMSEQ.H -- SIMD 16-bit Integer Compare Equal
+        //=============================================
+        // Rs1 = 0x1234_807F -> [0x1234, 0x807F]
+        // Rs2 = 0x1234_807F -> [0x1234, 0x807F]
+        // Compare: [0x807F == 0x807F] (Lower Half: True) -> 0xFFFF
+        //          [0x1234 == 0x1234] (Upper Half: True) -> 0xFFFF
+        // Expected Rd = 0xFFFF_FFFF -> [0xFFFF, 0xFFFF]
+        // vxsat = 0x00000000 (No saturation for this instruction)
+        (ALUops.PMSEQH, "h1234_807F".U, "h1234_807F".U, "hFFFF_FFFF".U, "h00000001".U),     // vxsat reg retains the previous value of 1
+        // Example testing inequality
+        (ALUops.PMSEQH, "h1234_807F".U, "h807F_1234".U, "h0000_0000".U, "h00000001".U),     // vxsat reg retains the previous value of 1
 
+        //================================================
+        //PMSLT.H -- SIMD 16-bit Signed Compare Less Than
+        //================================================
+        // Rs1 = 0x1357_FFFF -> [0xFFFF (-1)    , 0x1234 (+4660)]
+        // Rs2 = 0x5678_7FFF -> [0x7FFF (+32767), 0x5678 (+22136)]
+        // Compare: [0xFFFF < 0x7FFF] (Lower Half: True) -> 0xFFFF
+        //          [0x1357 < 0x5678] (Upper Half: True) -> 0xFFFF
+        // Expected Rd = 0xFFFF_FFFF -> [0xFFFF, 0xFFFF]
+        // vxsat = 0x00000000 (No saturation for this instruction)
+        (ALUops.PMSLTH, "h1234_FFFF".U, "h5678_7FFF".U, "hFFFF_FFFF".U, "h00000001".U),    // vxsat reg retains the previous value of 1
+        // Example testing false condition (basically compare greater than)
+        // Rs1 = 0xFFFF_7FFF -> [0xFFFF (-1)    , 0x7FFF (+32767)]
+        // Rs2 = 0x7FFF_8000 -> [0x7FFF (+32767), 0x8000 (-32768)]
+        // Compare: [0xFFFF < 0x7FFF] (Upper Half: False) -> 0x0000
+        //          [0x7FFF < 0x8000] (Lower Half: False) -> 0x0000
+        // Expected Rd = 0x0000_FFFF -> [0x0000, 0xFFFF]
+        // vxsat = 0x00000000 (No saturation for this instruction)
+        (ALUops.PMSLTH, "h7FFF_7FFF".U, "hFFFF_8000".U, "h0000_0000".U, "h00000001".U),   // vxsat reg retains the previous value of 1
 
+        //==================================================
+        //PMSLTU.H -- SIMD 16-bit Unsigned Compare Less Than
+        //==================================================
+        // Rs1 = 0x1234_0001 -> [0x0001, 0x1234]
+        // Rs2 = 0x5678_8000 -> [0x8000, 0x5678]
+        // Compare: [0x0001 < 0x8000] (Lower Half: True) -> 0xFFFF
+        //          [0x1234 < 0x5678] (Upper Half: True) -> 0xFFFF
+        // Expected Rd = 0xFFFF_FFFF -> [0xFFFF, 0xFFFF]
+        // vxsat = 0x00000000 (No saturation for this instruction)
+        (ALUops.PMSLTUH, "h1234_0001".U, "h5678_8000".U, "hFFFF_FFFF".U, "h00000001".U),    // vxsat reg retains the previous value of 1
+        // Example testing false condition (basically compare greater than)
+        (ALUops.PMSLTUH, "h8001_5678".U, "h4321_1234".U, "h0000_0000".U, "h00000001".U),    // vxsat reg retains the previous value of 1
 
+        //===========================================================
+        //PMSLE.H -- SIMD 16-bit Signed Compare Less Than or Equal       
+        //===========================================================
+        // Rs1 = 0xF234_8000 -> [0x8000 (-32768), 0xF234 (-3532)]
+        // Rs2 = 0xF234_F000 -> [0xF000 (-4096) , 0xF234 (-3532)]
+        // Compare: [0x8000 <= 0xF000] (Lower Half: True) -> 0xFFFF
+        //          [0xF234 <= 0xF234] (Upper Half: True) -> 0xFFFF
+        // Expected Rd = 0xFFFF_FFFF -> [0xFFFF, 0xFFFF]
+        // vxsat = 0x00000000 (No saturation for this instruction)
+        (ALUops.PMSLEH, "hF234_8000".U, "hF234_F000".U, "hFFFF_FFFF".U, "h00000001".U),   // vxsat reg retains the previous value of 1
+        // Rs1 = 0x7FFF_8001 -> [0x8001 (-32767), 0x7FFF (+32767)]
+        // Rs2 = 0xFFFF_8001 -> [0x8001 (-32767), 0xFFFF (-1)]
+        // Compare: [0x8001 <= 0x8001] (Lower Half: True) -> 0xFFFF
+        //          [0x7FFF <= 0xFFFF] (Upper Half: False) -> 0x0000
+        // Expected Rd = 0x0000_0000 -> [0x0000, 0x0000]
+        // vxsat = 0x00000000 (No saturation for this instruction)
+        (ALUops.PMSLEH, "h7FFF_8001".U, "hFFFF_8001".U, "h0000_FFFF".U, "h00000001".U),   // vxsat reg retains the previous value of 1
 
+        //===========================================================
+        //PMSLEU.H -- SIMD 16-bit Unsigned Compare Less Than & Equal       
+        //===========================================================
+          // Tests the equal to case
+        (ALUops.PMSLEUH, "h1234_807F".U, "h1234_807F".U, "hFFFF_FFFF".U, "h00000001".U),     // vxsat reg retains the previous value of 1
+          // Tests the greater then case basically
+        (ALUops.PMSLEUH, "h8FFF_5678".U, "h8001_1234".U, "h0000_0000".U, "h00000001".U),     // vxsat reg retains the previous value of 1
 
+        //======================================
+        //PMIN.H -- SIMD 16-bit Signed Minimum
+        //======================================
+        // Rs1 = 0x1234_8000 -> [0x1234 (+4660), 0x8000 (-32768)]
+        // Rs2 = 0x7FFF_0001 -> [0x7FFF (+32767), 0x0001 (+1)]
+        // Compare: Min(0x1234, 0x7FFF) (Upper Half: 0x1234 (+4660))
+        //          Min(0x8000, 0x0001) (Lower Half: 0x8000 (-32768))
+        // Expected Rd = 0x1234_8000 -> [0x1234 (+4660), 0x8000 (-32768)]
+        // vxsat = 0x00000000 (No saturation for this instruction)
+        (ALUops.PMINH, "h1234_8000".U, "h7FFF_0001".U, "h1234_8000".U, "h00000001".U),    // vxsat reg retains the previous value of 1
+        // Test for complete code coverage
+        (ALUops.PMINH, "h7FFF_0001".U, "hE789_FFFF".U, "hE789_FFFF".U, "h00000001".U),    // vxsat reg retains the previous value of 1
+        // Test for equal elements
+        (ALUops.PMINH, "h7FFF_0001".U, "h7FFF_0001".U, "h7FFF_0001".U, "h00000001".U),    // vxsat reg retains the previous value of 1
 
- 
+        //========================================
+        //PMINU.H -- SIMD 16-bit Unsigned Minimum
+        //========================================
+        // Rs1 = 0x1234_8000 -> [0x1234, 0x8000]
+        // Rs2 = 0x7FFF_0001 -> [0x7FFF, 0x0001]
+        // Compare: Min(0x1234, 0x7FFF) (Upper Half: 0x1234)
+        //          Min(0x8000, 0x0001) (Lower Half: 0x0001)
+        // Expected Rd = 0x1234_0001 -> [0x1234, 0x0001]
+        // vxsat = 0x00000000 (No saturation for this instruction)
+        (ALUops.PMINUH, "h1234_8000".U, "h7FFF_0001".U, "h1234_0001".U, "h00000001".U),   // vxsat reg retains the previous value of 1
+        // Test for complete code coverage
+        (ALUops.PMINUH, "hFFFF_0001".U, "h1234_FFFF".U, "h1234_0001".U, "h00000001".U),   // vxsat reg retains the previous value of 1
 
+        //=======================================
+        //PMAX.H -- SIMD 16-bit Signed Maximum
+        //=======================================
+        // Same tests as for signed minimum
+        (ALUops.PMAXH, "h1234_8000".U, "h7FFF_0001".U, "h7FFF_0001".U, "h00000001".U),    // vxsat reg retains the previous value of 1
+        // Test for complete code coverage
+        (ALUops.PMAXH, "h7FFF_0001".U, "hE789_FFFF".U, "h7FFF_0001".U, "h00000001".U),    // vxsat reg retains the previous value of 1
+        // Test for equal elements
+        (ALUops.PMAXH, "h7FFF_0001".U, "h7FFF_0001".U, "h7FFF_0001".U, "h00000001".U),    // vxsat reg retains the previous value of 1
+      
+        //=======================================
+        //PMAXU.H -- SIMD 16-bit Unsigned Maximum
+        //=======================================
+        // Same test as for unsigned minimum
+        (ALUops.PMAXUH, "h1234_8000".U, "h7FFF_0001".U, "h7FFF_8000".U, "h00000001".U),   // vxsat reg retains the previous value of 1
+        // Test for complete code coverage
+        (ALUops.PMAXUH, "hFFFF_0001".U, "h1234_FFFF".U, "hFFFF_FFFF".U, "h00000001".U),   // vxsat reg retains the previous value of 1
+      
+        //========================================
+        //PCLIP.H -- SIMD 16-bit Signed Clip Value     
+        //========================================
+        (ALUops.PCLIPH, "h1234_8000".U, "h0000_0003".U, "h0007_FFF8".U, "h00000001".U),
+        (ALUops.PCLIPH, "h8000_1234".U, "h0000_0003".U, "hFFF8_0007".U, "h00000001".U),
+        (ALUops.PCLIPH, "h0004_FFFF".U, "h0000_0003".U, "h0004_FFFF".U, "h00000000".U),
 
+        //==========================================
+        //PCLIPU.H -- SIMD 16-bit Unsigned Clip Value    
+        //==========================================
+        (ALUops.PCLIPUH, "h1234_8000".U, "h0000_0003".U, "h0007_0000".U, "h00000001".U),
+        (ALUops.PCLIPUH, "h8000_1234".U, "h0000_0003".U, "h0000_0007".U, "h00000001".U),
+        (ALUops.PCLIPUH, "h0004_0006".U, "h0000_0003".U, "h0004_0006".U, "h00000000".U),
 
-
-
-
-
-      )
+        //===============================
+        //PABS.H -- SIMD 16-bit Absolute       
+        //===============================
+        (ALUops.PABSH, "h1234_FFFD".U, "h0000_0000".U, "h1234_0003".U, "h00000000".U),
+        (ALUops.PABSH, "hFFFF_FFED".U, "h0000_0000".U, "h0001_0013".U, "h00000000".U),
+        (ALUops.PABSH, "hFFFD_1234".U, "h0000_0000".U, "h0003_1234".U, "h00000000".U)
+       )
 
       // Test each case
       for ((operation, rs1, rs2, expectedRd, expectedVxsat) <- testCases) {
