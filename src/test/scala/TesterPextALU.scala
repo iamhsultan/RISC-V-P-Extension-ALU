@@ -513,7 +513,8 @@ class PextALUWrapperTester extends AnyFlatSpec with ChiselScalatestTester {
         //PCLIPU.H -- SIMD 16-bit Unsigned Clip Value    
         //==========================================
         (ALUops.PCLIPUH, "h1234_8000".U, "h0000_0003".U, "h0007_0000".U, "h00000001".U),
-        (ALUops.PCLIPUH, "h8000_1234".U, "h0000_0003".U, "h0000_0007".U, "h00000001".U),
+        (ALUops.PCLIPUH, "h8000_F234".U, "h0000_0003".U, "h0000_0000".U, "h00000001".U),
+        (ALUops.PCLIPUH, "h7FFF_F001".U, "h0000_0003".U, "h0007_0000".U, "h00000001".U),
         (ALUops.PCLIPUH, "h0004_0006".U, "h0000_0003".U, "h0004_0006".U, "h00000000".U),
 
         //===============================

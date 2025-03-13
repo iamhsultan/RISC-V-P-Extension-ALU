@@ -82,24 +82,39 @@ class TwosComplementGenerator extends Module {
     
     io.output := complementValue
 }
-  
-//=============================================================
-// Mux module for SIMD compare, max-min and absolute operations
-//=============================================================
-class SimdMuxHalf extends Module {
-    val io = IO(new Bundle {
-        val cond     = Input(Vec(2, Bool()))       // Conditions for lower and upper halves
-        val trueVal  = Input(Vec(2, UInt(16.W)))   // True values for lower and upper halves
-        val falseVal = Input(Vec(2, UInt(16.W)))   // False values for lower and upper halves
-        val out      = Output(Vec(2, UInt(16.W)))  // Outputs for lower and upper halves
-    })
-    // Outputs initialised to zero
-    io.out := VecInit(Seq.fill(2)(0.U(16.W)))
-    
-    io.out(0) := Mux(io.cond(0), io.trueVal(0), io.falseVal(0)) // Lower half
-    io.out(1) := Mux(io.cond(1), io.trueVal(1), io.falseVal(1)) // Upper half
+
+//=======================================================
+// Module handling the signed and unsigned clip operations
+//=======================================================
+class SimdClipHalf extends Module {
+  val io = IO(new Bundle {
+    val in          = Input(Vec(2, SInt(16.W)))  // Input elements
+    val upperLimit  = Input(SInt(16.W))          // Upper clipping limit
+    val lowerLimit  = Input(SInt(16.W))          // Lower clipping limit
+    val maskValue   = Input(Vec(2, SInt(16.W)))   // Precomputed mask (instruction-specific)
+    //val isUnsigned  = Input(Bool())               // Flag for unsigned clipping
+    val out         = Output(Vec(2, SInt(16.W)))  // Clipped outputs
+    val overflow    = Output(Vec(2, Bool()))      // Overflow flags
+  })
+
+    io.out      := VecInit(Seq.fill(2)(0.S(16.W)))
+    io.overflow := VecInit(Seq.fill(2)(false.B))
+
+  for (i <- 0 until 2) {
+    // Shared logic for overflow detection using masks
+    val sign =  io.in(i)(15) // Sign bit (0 for unsigned)
+    val posov = (io.maskValue(i) =/= 0.S) && !sign       // Positive overflow 
+    val negov = (io.maskValue(i) =/= io.lowerLimit) && sign // Negative overflow 
+
+    io.out(i) := MuxCase(io.in(i), Seq(
+      posov -> io.upperLimit,
+      negov -> io.lowerLimit
+    ))
+    io.overflow(i) := posov || negov
+  }
 }
 
+/* clipping using comparators
 //=======================================================
 // Module handling the signed and unsigned clip operations
 //=======================================================
@@ -130,6 +145,7 @@ class SimdClipHalf extends Module {
         }
     }
 }
+*/
 
 //================================
 // ------P Extension ALU----------
@@ -152,14 +168,11 @@ class PextALU extends Module {
     // Instantiation
     val fourByteAdder    = Module(new AdderALU())                   // 4x8-bit adder module
     val twosComplement   = Module(new TwosComplementGenerator())    // Two's Complement generator module
-    val simdMux          = Module(new SimdMuxHalf())                // CMP,MAX-MIN,ABS module
     val simdClip         = Module(new SimdClipHalf())               // Module for signed and unsigned clip operations
 
     // Internal Wires
     val sumWires         = WireDefault(VecInit(Seq.fill(4)(0.U(9.W))))  // 9-bit wires to hold results from four-byte adder
     val overflowDetected = VecInit(Seq.fill(4)((false.B)))              // A vector of 4 wires to capture overflow info for each 8-bit adder. Default value is 0
-    //val lowerHalf        = WireDefault(0.U(16.W))                       // 16-bit wire for the lower half of comparison operations
-    //val upperHalf        = WireDefault(0.U(16.W))                       // 16-bit wire for the upper half of comparison operations
 
     // Initialize all inputs of `fourByteAdder` to zero 
     fourByteAdder.io.a         := VecInit(Seq.fill(4)(0.U(9.W)))
@@ -168,14 +181,12 @@ class PextALU extends Module {
     // Initialize all inputs of `twosComplement` to zero
     twosComplement.io.input    := VecInit(Seq.fill(4)(0.U(9.W)))
     twosComplement.io.widthSel := false.B
-    // Initialise the inputs of Mux module
-    simdMux.io.trueVal  := VecInit(Seq.fill(2)(0.U(16.W)))
-    simdMux.io.falseVal := VecInit(Seq.fill(2)(0.U(16.W)))
-    simdMux.io.cond     := VecInit(Seq.fill(2)(false.B))
     // Initialise the inputs of clipping module
     simdClip.io.in         := VecInit(Seq.fill(2)(0.S(16.W)))
     simdClip.io.upperLimit := 0.S(16.W)
     simdClip.io.lowerLimit := 0.S(16.W)
+    simdClip.io.maskValue := VecInit(Seq.fill(2)(0.S(16.W)))
+    //simdClip.io.isUnsigned := false.B
     
     // ALU operation selection 
     //================================
@@ -1027,35 +1038,101 @@ class PextALU extends Module {
     //=================================================
     // 26. PMSEQ.H -- SIMD 16-bit Integer Compare Equal
     //=================================================
-    }.elsewhen(io.operation === ALUops.PMSEQH) {      
-        
-        //  =====CONDITION=====
-        simdMux.io.cond := VecInit(Seq(
-            io.Rs1(15, 0)  === io.Rs2(15, 0),  // Lower half condition
-            io.Rs1(31, 16) === io.Rs2(31, 16)  // Upper half condition
-          ))
-        //  =====VALUES=====
-          simdMux.io.trueVal  := VecInit(Seq.fill(2)("hFFFF".U(16.W))) // Same true value for both halves
-          simdMux.io.falseVal := VecInit(Seq.fill(2)(0.U(16.W)))       // Same false value for both halves
-        //  =====OUTPUT=====
-          io.Rd        := Cat(simdMux.io.out(1), simdMux.io.out(0)) // Concatenate upper and lower halves
-          io.vxsat_out := io.vxsat_in
+    }.elsewhen(io.operation === ALUops.PMSEQH) {
+
+        twosComplement.io.widthSel := true.B
+
+        fourByteAdder.io.a(0)       := io.Rs1(7 , 0)
+        twosComplement.io.input(0)  := io.Rs2(7 , 0)       
+        fourByteAdder.io.b(0)       := twosComplement.io.output(0)     
+        fourByteAdder.io.carryIn(0) := 0.U
+
+        // Adder 1
+        fourByteAdder.io.a(1)       := io.Rs1(15 , 8)
+        twosComplement.io.input(1)  := Cat(io.Rs2(15) , io.Rs2(15 , 8))     // Upper 8bits of halfword sign extended in order to get 16bit complement value
+        fourByteAdder.io.b(1)       := twosComplement.io.output(1)          // Complemented 9bit value sent to 9.W Adder1 input. Refer to Complement Generator module
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)         // Carryout from previous byte result added to next byte. Carry out from lower byte has to be preserved.
+        // Adder 2
+        fourByteAdder.io.a(2)       := io.Rs1(23 , 16)
+        twosComplement.io.input(2)  := io.Rs2(23 , 16)
+        fourByteAdder.io.b(2)       := twosComplement.io.output(2)
+        fourByteAdder.io.carryIn(2) := 0.U
+        // Adder 3
+        fourByteAdder.io.a(3)       := io.Rs1(31 , 24)
+        twosComplement.io.input(3)  := Cat(io.Rs2(31) , io.Rs2(31 , 24))
+        fourByteAdder.io.b(3)       := twosComplement.io.output(3)
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
+
+        when( (Cat(fourByteAdder.io.sum(1)(7,0) , fourByteAdder.io.sum(0)(7,0))) === 0.U(16.W) ) {      
+            sumWires(0)         := 255.U
+            sumWires(1)         := 255.U
+        }.otherwise {
+            sumWires(0)         := 0.U
+            sumWires(1)         := 0.U
+        }
+
+        when( (Cat(fourByteAdder.io.sum(3)(7,0) , fourByteAdder.io.sum(2)(7,0))) === 0.U(16.W) ) {      
+            sumWires(2)         := 255.U
+            sumWires(3)         := 255.U
+        }.otherwise {
+            sumWires(2)         := 0.U
+            sumWires(3)         := 0.U
+        } 
+
+        io.Rd        := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
+        io.vxsat_out := io.vxsat_in     // Status register. No extra overflow information coming out of this operation
     
     //====================================================
     // 27. PMSLT.H -- SIMD 16-bit Signed Compare Less Than
     //====================================================
     }.elsewhen(io.operation === ALUops.PMSLTH) {
 
-        //  =====CONDITION=====
-        simdMux.io.cond := VecInit(Seq(
-            (io.Rs1(15 ,  0)).asSInt < (io.Rs2(15 ,  0)).asSInt,  // Lower half condition
-            (io.Rs1(31 , 16)).asSInt < (io.Rs2(31 , 16)).asSInt   // Upper half condition
-            ))
-        //  =====VALUES=====
-        simdMux.io.trueVal  := VecInit(Seq.fill(2)("hFFFF".U(16.W))) // Same true value for both halves
-        simdMux.io.falseVal := VecInit(Seq.fill(2)(0.U(16.W)))       // Same false value for both halves
-        //  =====OUTPUT=====
-        io.Rd        := Cat(simdMux.io.out(1), simdMux.io.out(0)) // Concatenate upper and lower halves
+        twosComplement.io.widthSel := true.B        // 16bit complement generator selected
+        // Adder 0
+        fourByteAdder.io.a(0)       := io.Rs1(7 , 0)
+        twosComplement.io.input(0)  := io.Rs2(7 , 0)                    // Lower 8bits sent as is to 16bit Twos Complement generator. Refer to Two's Complement generator class
+        fourByteAdder.io.b(0)       := twosComplement.io.output(0)      // Lower 8bits from SE-17bit-complemented values goes to (9.W) b input of Adder(REFER to TwosComplementGenerator class).
+        fourByteAdder.io.carryIn(0) := 0.U
+        // Adder 1
+        fourByteAdder.io.a(1)       := Cat(io.Rs1(15) , io.Rs1(15 , 8)) // Sign Extension for first input in order to get SE17
+        twosComplement.io.input(1)  := Cat(io.Rs2(15) , io.Rs2(15 , 8)) // Sign Extended second input sent to 16bit complement generator.  Refer to Two's Complement generator class
+        fourByteAdder.io.b(1)       := twosComplement.io.output(1)      // Upper 9bits from SE-17bit-complemented values goes to (9.W) b input of Adder
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)     
+        // Adder 2
+        fourByteAdder.io.a(2)       := io.Rs1(23 , 16)
+        twosComplement.io.input(2)  := io.Rs2(23 , 16)
+        fourByteAdder.io.b(2)       := twosComplement.io.output(2)
+        fourByteAdder.io.carryIn(2) := 0.U
+        // Adder 3
+        fourByteAdder.io.a(3)       := Cat(io.Rs1(31) , io.Rs1(31 , 24))
+        twosComplement.io.input(3)  := Cat(io.Rs2(31) , io.Rs2(31 , 24))
+        fourByteAdder.io.b(3)       := twosComplement.io.output(3)
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
+
+        // Compare logic for the lower 16-bit half-word
+        when( (io.Rs1(15) === io.Rs2(15)) && (fourByteAdder.io.sum(1)(7) === 1.U) ) {     // Subtrahend and minuned are positive or negative, result is negative ie MSB is 1                  
+            sumWires(0)         := 255.U
+            sumWires(1)         := 255.U                                     
+        }.elsewhen( io.Rs1(15) && !(io.Rs2(15))  ) {                                       // Subtrahend is negative, minuend is positive. Irrespective of the result.
+            sumWires(0)         := 255.U              // Lower byte saturated to FF
+            sumWires(1)         := 255.U              // Upper byte saturated to FF
+        }.otherwise {
+            sumWires(0)         := 0.U         
+            sumWires(1)         := 0.U         
+        }
+        
+        when( (io.Rs1(31) === io.Rs2(31)) && (fourByteAdder.io.sum(3)(7) === 1.U) ) {     // Subtrahend and minuned are positive or negative, result is negative ie MSB is 1                  
+            sumWires(2)         := 255.U  
+            sumWires(3)         := 255.U                                   
+        }.elsewhen( io.Rs1(31) && !(io.Rs2(31))  ) {                                       // Subtrahend is negative, minuend is positive. Irrespective of the result.
+            sumWires(2)         := 255.U              // Lower byte saturated to FF
+            sumWires(3)         := 255.U              // Upper byte saturated to FF
+        }.otherwise {
+            sumWires(2)         := 0.U         
+            sumWires(3)         := 0.U         
+        }
+
+        io.Rd        := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
         io.vxsat_out := io.vxsat_in
     
     //=======================================================
@@ -1063,50 +1140,158 @@ class PextALU extends Module {
     //=======================================================
     }.elsewhen(io.operation === ALUops.PMSLTUH) {
 
-        //  =====CONDITION=====
-        simdMux.io.cond := VecInit(Seq(
-            io.Rs1(15, 0)  < io.Rs2(15, 0),  // Lower half condition
-            io.Rs1(31, 16) < io.Rs2(31, 16)  // Upper half condition
-            ))
-        //  =====VALUES=====
-        simdMux.io.trueVal  := VecInit(Seq.fill(2)("hFFFF".U(16.W))) // Same true value for both halves
-        simdMux.io.falseVal := VecInit(Seq.fill(2)(0.U(16.W)))       // Same false value for both halves
-        //  =====OUTPUT=====
-        io.Rd        := Cat(simdMux.io.out(1), simdMux.io.out(0)) // Concatenate upper and lower halves
+        twosComplement.io.widthSel := true.B        // 16bit complement generator selected
+        // Adder 0
+        fourByteAdder.io.a(0)       := io.Rs1(7 , 0)
+        twosComplement.io.input(0)  := io.Rs2(7 , 0)                    // Lower 8bits sent as is to 16bit Twos Complement generator. Refer to Two's Complement generator class
+        fourByteAdder.io.b(0)       := twosComplement.io.output(0)      // Lower 8bits from SE-17bit-complemented values goes to (9.W) b input of Adder(REFER to TwosComplementGenerator class).
+        fourByteAdder.io.carryIn(0) := 0.U
+        // Adder 1
+        fourByteAdder.io.a(1)       := Cat(io.Rs1(15) , io.Rs1(15 , 8)) // Sign Extension for first input in order to get SE17
+        twosComplement.io.input(1)  := Cat(io.Rs2(15) , io.Rs2(15 , 8)) // Sign Extended second input sent to 16bit complement generator.  Refer to Two's Complement generator class
+        fourByteAdder.io.b(1)       := twosComplement.io.output(1)      // Upper 9bits from SE-17bit-complemented values goes to (9.W) b input of Adder
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)     
+        // Adder 2
+        fourByteAdder.io.a(2)       := io.Rs1(23 , 16)
+        twosComplement.io.input(2)  := io.Rs2(23 , 16)
+        fourByteAdder.io.b(2)       := twosComplement.io.output(2)
+        fourByteAdder.io.carryIn(2) := 0.U
+        // Adder 3
+        fourByteAdder.io.a(3)       := Cat(io.Rs1(31) , io.Rs1(31 , 24))
+        twosComplement.io.input(3)  := Cat(io.Rs2(31) , io.Rs2(31 , 24))
+        fourByteAdder.io.b(3)       := twosComplement.io.output(3)
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
+
+        // Compare logic for the lower 16-bit half-word
+        when( (io.Rs1(15) === io.Rs2(15)) && (fourByteAdder.io.sum(1)(7) === 1.U) ) {     // Subtrahend and minuned are smaller, result is larger ie MSB is 1                  
+            sumWires(0)         := 255.U
+            sumWires(1)         := 255.U                                     
+        }.elsewhen( !(io.Rs1(15)) && io.Rs2(15) ) {                                       // Subtrahend is smaller, minuend is larger. Irrespective of the result.
+            sumWires(0)         := 255.U              // Lower byte saturated to FF
+            sumWires(1)         := 255.U              // Upper byte saturated to FF
+        }.otherwise {
+            sumWires(0)         := 0.U         
+            sumWires(1)         := 0.U         
+        }
+        
+        when( (io.Rs1(31) === io.Rs2(31)) && (fourByteAdder.io.sum(3)(7) === 1.U) ) {     // Subtrahend and minuned are smaller, result is larger ie MSB is 1                     
+            sumWires(2)         := 255.U  
+            sumWires(3)         := 255.U                                   
+        }.elsewhen( !(io.Rs1(31)) && io.Rs2(31) ) {                                       // Subtrahend is smaller, minuend is larger. Irrespective of the result.
+            sumWires(2)         := 255.U              // Lower byte saturated to FF
+            sumWires(3)         := 255.U              // Upper byte saturated to FF
+        }.otherwise {
+            sumWires(2)         := 0.U         
+            sumWires(3)         := 0.U         
+        }
+
+        io.Rd        := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
         io.vxsat_out := io.vxsat_in
-    
+
     //=============================================================
     // 29. PMSLE.H -- SIMD 16-bit Signed Compare Less Than or Equal         Possible nomenclature error in the specification
     //=============================================================
     }.elsewhen(io.operation === ALUops.PMSLEH) {
 
-        //  =====CONDITION=====
-            simdMux.io.cond := VecInit(Seq(
-                (io.Rs1(15 ,  0)).asSInt <= (io.Rs2(15 ,  0)).asSInt,  // Lower half condition
-                (io.Rs1(31 , 16)).asSInt <= (io.Rs2(31 , 16)).asSInt   // Upper half condition
-              ))
-            //  =====VALUES=====
-              simdMux.io.trueVal  := VecInit(Seq.fill(2)("hFFFF".U(16.W))) // Same true value for both halves
-              simdMux.io.falseVal := VecInit(Seq.fill(2)(0.U(16.W)))       // Same false value for both halves
-            //  =====OUTPUT=====
-              io.Rd        := Cat(simdMux.io.out(1), simdMux.io.out(0)) // Concatenate upper and lower halves
-              io.vxsat_out := io.vxsat_in
+         twosComplement.io.widthSel := true.B        // 16bit complement generator selected
+        // Adder 0
+        fourByteAdder.io.a(0)       := io.Rs1(7 , 0)
+        twosComplement.io.input(0)  := io.Rs2(7 , 0)                    // Lower 8bits sent as is to 16bit Twos Complement generator. Refer to Two's Complement generator class
+        fourByteAdder.io.b(0)       := twosComplement.io.output(0)      // Lower 8bits from SE-17bit-complemented values goes to (9.W) b input of Adder(REFER to TwosComplementGenerator class).
+        fourByteAdder.io.carryIn(0) := 0.U
+        // Adder 1
+        fourByteAdder.io.a(1)       := Cat(io.Rs1(15) , io.Rs1(15 , 8)) // Sign Extension for first input in order to get SE17
+        twosComplement.io.input(1)  := Cat(io.Rs2(15) , io.Rs2(15 , 8)) // Sign Extended second input sent to 16bit complement generator.  Refer to Two's Complement generator class
+        fourByteAdder.io.b(1)       := twosComplement.io.output(1)      // Upper 9bits from SE-17bit-complemented values goes to (9.W) b input of Adder
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)     
+        // Adder 2
+        fourByteAdder.io.a(2)       := io.Rs1(23 , 16)
+        twosComplement.io.input(2)  := io.Rs2(23 , 16)
+        fourByteAdder.io.b(2)       := twosComplement.io.output(2)
+        fourByteAdder.io.carryIn(2) := 0.U
+        // Adder 3
+        fourByteAdder.io.a(3)       := Cat(io.Rs1(31) , io.Rs1(31 , 24))
+        twosComplement.io.input(3)  := Cat(io.Rs2(31) , io.Rs2(31 , 24))
+        fourByteAdder.io.b(3)       := twosComplement.io.output(3)
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
+
+        // Compare logic for the lower 16-bit half-word
+        when( ((io.Rs1(15) === io.Rs2(15)) && (fourByteAdder.io.sum(1)(7) === 1.U)) || (Cat(fourByteAdder.io.sum(1)(7,0) , fourByteAdder.io.sum(0)(7,0)) === 0.U(16.W)) ) {     // (Subtrahend and minuned are positive or negative, result is negative ie MSB is 1) OR equal ie sum is zero                 
+            sumWires(0)         := 255.U
+            sumWires(1)         := 255.U                                     
+        }.elsewhen( (io.Rs1(15) && !(io.Rs2(15))) || (Cat(fourByteAdder.io.sum(1)(7,0) , fourByteAdder.io.sum(0)(7,0)) === 0.U(16.W))  ) {                                       // Subtrahend is negative, minuend is positive. Irrespective of the result. OR. equal ie sum is zero
+            sumWires(0)         := 255.U              // Lower byte saturated to FF
+            sumWires(1)         := 255.U              // Upper byte saturated to FF
+        }.otherwise {
+            sumWires(0)         := 0.U         
+            sumWires(1)         := 0.U         
+        }
+        
+        when( ((io.Rs1(31) === io.Rs2(31)) && (fourByteAdder.io.sum(3)(7) === 1.U)) || (Cat(fourByteAdder.io.sum(3)(7,0) , fourByteAdder.io.sum(2)(7,0)) === 0.U(16.W)) ) {     // Subtrahend and minuned are positive or negative, result is negative ie MSB is 1 OR equal ie sum is zero                 
+            sumWires(2)         := 255.U  
+            sumWires(3)         := 255.U                                   
+        }.elsewhen( (io.Rs1(31) && !(io.Rs2(31))) || (Cat(fourByteAdder.io.sum(3)(7,0) , fourByteAdder.io.sum(2)(7,0)) === 0.U(16.W))  ) {                                       // Subtrahend is negative, minuend is positive. Irrespective of the result. OR. equal ie sum is zero
+            sumWires(2)         := 255.U              // Lower byte saturated to FF
+            sumWires(3)         := 255.U              // Upper byte saturated to FF
+        }.otherwise {
+            sumWires(2)         := 0.U         
+            sumWires(3)         := 0.U         
+        }
+
+        io.Rd        := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
+        io.vxsat_out := io.vxsat_in
     
     //===============================================================
     // 30. PMSLEU.H -- SIMD 16-bit Unsigned Compare Less Than & Equal       Possible nomenclature error in the specification
     //===============================================================
     }.elsewhen(io.operation === ALUops.PMSLEUH) {
 
-        //  =====CONDITION=====
-        simdMux.io.cond := VecInit(Seq(
-            io.Rs1(15, 0)  <= io.Rs2(15, 0),  // Lower half condition
-            io.Rs1(31, 16) <= io.Rs2(31, 16)  // Upper half condition
-            ))
-        //  =====VALUES=====
-        simdMux.io.trueVal  := VecInit(Seq.fill(2)("hFFFF".U(16.W))) // Same true value for both halves
-        simdMux.io.falseVal := VecInit(Seq.fill(2)(0.U(16.W)))       // Same false value for both halves
-        //  =====OUTPUT=====
-        io.Rd        := Cat(simdMux.io.out(1), simdMux.io.out(0)) // Concatenate upper and lower halves
+         twosComplement.io.widthSel := true.B        // 16bit complement generator selected
+        // Adder 0
+        fourByteAdder.io.a(0)       := io.Rs1(7 , 0)
+        twosComplement.io.input(0)  := io.Rs2(7 , 0)                    // Lower 8bits sent as is to 16bit Twos Complement generator. Refer to Two's Complement generator class
+        fourByteAdder.io.b(0)       := twosComplement.io.output(0)      // Lower 8bits from SE-17bit-complemented values goes to (9.W) b input of Adder(REFER to TwosComplementGenerator class).
+        fourByteAdder.io.carryIn(0) := 0.U
+        // Adder 1
+        fourByteAdder.io.a(1)       := Cat(io.Rs1(15) , io.Rs1(15 , 8)) // Sign Extension for first input in order to get SE17
+        twosComplement.io.input(1)  := Cat(io.Rs2(15) , io.Rs2(15 , 8)) // Sign Extended second input sent to 16bit complement generator.  Refer to Two's Complement generator class
+        fourByteAdder.io.b(1)       := twosComplement.io.output(1)      // Upper 9bits from SE-17bit-complemented values goes to (9.W) b input of Adder
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)     
+        // Adder 2
+        fourByteAdder.io.a(2)       := io.Rs1(23 , 16)
+        twosComplement.io.input(2)  := io.Rs2(23 , 16)
+        fourByteAdder.io.b(2)       := twosComplement.io.output(2)
+        fourByteAdder.io.carryIn(2) := 0.U
+        // Adder 3
+        fourByteAdder.io.a(3)       := Cat(io.Rs1(31) , io.Rs1(31 , 24))
+        twosComplement.io.input(3)  := Cat(io.Rs2(31) , io.Rs2(31 , 24))
+        fourByteAdder.io.b(3)       := twosComplement.io.output(3)
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
+
+        // Compare logic for the lower 16-bit half-word
+        when( ((io.Rs1(15) === io.Rs2(15)) && (fourByteAdder.io.sum(1)(7) === 1.U)) || ((Cat(fourByteAdder.io.sum(1)(7,0) , fourByteAdder.io.sum(0)(7,0)) === 0.U(16.W))) ) {     // Subtrahend and minuned are smaller, result is larger ie MSB is 1 OR equal ie result is zero                  
+            sumWires(0) := 255.U
+            sumWires(1) := 255.U                                     
+        }.elsewhen( (!(io.Rs1(15)) && io.Rs2(15)) || ((Cat(fourByteAdder.io.sum(1)(7,0) , fourByteAdder.io.sum(0)(7,0)) === 0.U(16.W))) ) {  // Subtrahend is smaller, minuend is larger. Irrespective of the result. OR. equal ie sum is zero
+            sumWires(0)         := 255.U              // Lower byte saturated to FF
+            sumWires(1)         := 255.U              // Upper byte saturated to FF
+        }.otherwise {
+            sumWires(0)         := 0.U         
+            sumWires(1)         := 0.U         
+        }
+        
+        when( ((io.Rs1(31) === io.Rs2(31)) && (fourByteAdder.io.sum(3)(7) === 1.U)) || ((Cat(fourByteAdder.io.sum(3)(7,0) , fourByteAdder.io.sum(2)(7,0)) === 0.U(16.W))) ) {     // Subtrahend and minuned are smaller, result is larger ie MSB is 1                     
+            sumWires(2) := 255.U  
+            sumWires(3) := 255.U                                   
+        }.elsewhen( (!(io.Rs1(31)) && io.Rs2(31)) || ((Cat(fourByteAdder.io.sum(3)(7,0) , fourByteAdder.io.sum(2)(7,0)) === 0.U(16.W))) ) {                                       // Subtrahend is smaller, minuend is larger. Irrespective of the result.
+            sumWires(2)         := 255.U              // Lower byte saturated to FF
+            sumWires(3)         := 255.U              // Upper byte saturated to FF
+        }.otherwise {
+            sumWires(2)         := 0.U         
+            sumWires(3)         := 0.U         
+        }
+
+        io.Rd        := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
         io.vxsat_out := io.vxsat_in
     
      //==================================MIN MAX INSTRUCTIONS====================================//
@@ -1114,22 +1299,52 @@ class PextALU extends Module {
     // 31. PMIN.H -- SIMD 16-bit Signed Minimum
     //=========================================
     }.elsewhen(io.operation === ALUops.PMINH) {
-        //  =====CONDITION=====
-        simdMux.io.cond := VecInit(Seq(
-            (io.Rs1(15, 0)).asSInt  < (io.Rs2(15, 0)).asSInt,  // Lower half condition
-            (io.Rs1(31, 16)).asSInt < (io.Rs2(31, 16)).asSInt  // Upper half condition
-        ))
-        //  =====VALUE=====
-        simdMux.io.trueVal := VecInit(Seq(
-            io.Rs1(15, 0),                                  // True value for lower half
-            io.Rs1(31, 16)                                  // True value for upper half
-        ))     
-        simdMux.io.falseVal := VecInit(Seq(
-            io.Rs2(15, 0),                                  // False value for lower half
-            io.Rs2(31, 16)                                  // False value for upper half
-        ))
-        //  =====OUTPUT=====
-        io.Rd        := Cat(simdMux.io.out(1), simdMux.io.out(0)) // Concatenate upper and lower halves
+        twosComplement.io.widthSel := true.B        // 16bit complement generator selected
+        // Adder 0
+        fourByteAdder.io.a(0)       := io.Rs1(7 , 0)
+        twosComplement.io.input(0)  := io.Rs2(7 , 0)                    // Lower 8bits sent as is to 16bit Twos Complement generator. Refer to Two's Complement generator class
+        fourByteAdder.io.b(0)       := twosComplement.io.output(0)      // Lower 8bits from SE-17bit-complemented values goes to (9.W) b input of Adder(REFER to TwosComplementGenerator class).
+        fourByteAdder.io.carryIn(0) := 0.U
+        // Adder 1
+        fourByteAdder.io.a(1)       := Cat(io.Rs1(15) , io.Rs1(15 , 8)) // Sign Extension for first input in order to get SE17
+        twosComplement.io.input(1)  := Cat(io.Rs2(15) , io.Rs2(15 , 8)) // Sign Extended second input sent to 16bit complement generator.  Refer to Two's Complement generator class
+        fourByteAdder.io.b(1)       := twosComplement.io.output(1)      // Upper 9bits from SE-17bit-complemented values goes to (9.W) b input of Adder
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)     
+        // Adder 2
+        fourByteAdder.io.a(2)       := io.Rs1(23 , 16)
+        twosComplement.io.input(2)  := io.Rs2(23 , 16)
+        fourByteAdder.io.b(2)       := twosComplement.io.output(2)
+        fourByteAdder.io.carryIn(2) := 0.U
+        // Adder 3
+        fourByteAdder.io.a(3)       := Cat(io.Rs1(31) , io.Rs1(31 , 24))
+        twosComplement.io.input(3)  := Cat(io.Rs2(31) , io.Rs2(31 , 24))
+        fourByteAdder.io.b(3)       := twosComplement.io.output(3)
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
+
+        // Compare logic for the lower 16-bit half-word
+        when( (io.Rs1(15) === io.Rs2(15)) && (fourByteAdder.io.sum(1)(7) === 1.U) ) {     // Subtrahend and minuned are positive or negative, result is negative ie MSB is 1                  
+            sumWires(0)         := io.Rs1(7 , 0)
+            sumWires(1)         := io.Rs1(15 , 8)                                     
+        }.elsewhen( io.Rs1(15) && !(io.Rs2(15))  ) {                                       // Subtrahend is negative, minuend is positive. Irrespective of the result.
+            sumWires(0)         := io.Rs1(7 , 0)
+            sumWires(1)         := io.Rs1(15 , 8)
+        }.otherwise {
+            sumWires(0)         := io.Rs2(7 , 0)         
+            sumWires(1)         := io.Rs2(15 , 8)        
+        }
+        
+        when( (io.Rs1(31) === io.Rs2(31)) && (fourByteAdder.io.sum(3)(7) === 1.U) ) {     // Subtrahend and minuned are positive or negative, result is negative ie MSB is 1                  
+            sumWires(2)         := io.Rs1(23 , 16)  
+            sumWires(3)         := io.Rs1(31 , 24)                                   
+        }.elsewhen( io.Rs1(31) && !(io.Rs2(31))  ) {                                       // Subtrahend is negative, minuend is positive. Irrespective of the result.
+            sumWires(2)         := io.Rs1(23 , 16)
+            sumWires(3)         := io.Rs1(31 , 24)   
+        }.otherwise {
+            sumWires(2)         := io.Rs2(23 , 16)            
+            sumWires(3)         := io.Rs2(31 , 24)            
+        }
+
+        io.Rd        := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
         io.vxsat_out := io.vxsat_in
     
     //============================================
@@ -1137,22 +1352,52 @@ class PextALU extends Module {
     //============================================
     }.elsewhen(io.operation === ALUops.PMINUH) {
 
-        //  =====CONDITION=====
-        simdMux.io.cond := VecInit(Seq(
-            io.Rs1(15, 0)  < io.Rs2(15, 0),   // Lower half condition
-            io.Rs1(31, 16) < io.Rs2(31, 16)  // Upper half condition
-        ))
-        //  =====VALUE=====
-        simdMux.io.trueVal := VecInit(Seq(
-            io.Rs1(15, 0),                                  // True value for lower half
-            io.Rs1(31, 16)                                  // True value for upper half
-        ))     
-        simdMux.io.falseVal := VecInit(Seq(
-            io.Rs2(15, 0),                                  // False value for lower half
-            io.Rs2(31, 16)                                  // False value for upper half
-        ))
-        //  =====OUTPUT=====
-        io.Rd        := Cat(simdMux.io.out(1), simdMux.io.out(0)) // Concatenate upper and lower halves
+        twosComplement.io.widthSel := true.B        // 16bit complement generator selected
+        // Adder 0
+        fourByteAdder.io.a(0)       := io.Rs1(7 , 0)
+        twosComplement.io.input(0)  := io.Rs2(7 , 0)                    // Lower 8bits sent as is to 16bit Twos Complement generator. Refer to Two's Complement generator class
+        fourByteAdder.io.b(0)       := twosComplement.io.output(0)      // Lower 8bits from SE-17bit-complemented values goes to (9.W) b input of Adder(REFER to TwosComplementGenerator class).
+        fourByteAdder.io.carryIn(0) := 0.U
+        // Adder 1
+        fourByteAdder.io.a(1)       := Cat(io.Rs1(15) , io.Rs1(15 , 8)) // Sign Extension for first input in order to get SE17
+        twosComplement.io.input(1)  := Cat(io.Rs2(15) , io.Rs2(15 , 8)) // Sign Extended second input sent to 16bit complement generator.  Refer to Two's Complement generator class
+        fourByteAdder.io.b(1)       := twosComplement.io.output(1)      // Upper 9bits from SE-17bit-complemented values goes to (9.W) b input of Adder
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)     
+        // Adder 2
+        fourByteAdder.io.a(2)       := io.Rs1(23 , 16)
+        twosComplement.io.input(2)  := io.Rs2(23 , 16)
+        fourByteAdder.io.b(2)       := twosComplement.io.output(2)
+        fourByteAdder.io.carryIn(2) := 0.U
+        // Adder 3
+        fourByteAdder.io.a(3)       := Cat(io.Rs1(31) , io.Rs1(31 , 24))
+        twosComplement.io.input(3)  := Cat(io.Rs2(31) , io.Rs2(31 , 24))
+        fourByteAdder.io.b(3)       := twosComplement.io.output(3)
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
+
+        // Compare logic for the lower 16-bit half-word
+        when( (io.Rs1(15) === io.Rs2(15)) && (fourByteAdder.io.sum(1)(7) === 1.U) ) {     //  result is larger than operands ie MSB is 1                  
+            sumWires(0)         := io.Rs1(7 , 0)
+            sumWires(1)         := io.Rs1(15 , 8)                                   
+        }.elsewhen( !(io.Rs1(15)) && io.Rs2(15) ) {                                       // Subtrahend is smaller, minuend is larger. Irrespective of the result.
+            sumWires(0)         := io.Rs1(7 , 0)
+            sumWires(1)         := io.Rs1(15 , 8)
+        }.otherwise {
+            sumWires(0)         := io.Rs2(7 , 0)         
+            sumWires(1)         := io.Rs2(15 , 8)        
+        }
+        
+        when( (io.Rs1(31) === io.Rs2(31)) && (fourByteAdder.io.sum(3)(7) === 1.U) ) {     // result is larger than operands ie MSB is 1                       
+            sumWires(2)         := io.Rs1(23 , 16)  
+            sumWires(3)         := io.Rs1(31 , 24)                                   
+        }.elsewhen( !(io.Rs1(31)) && io.Rs2(31) ) {                                       // Subtrahend is smaller, minuend is larger. Irrespective of the result.
+            sumWires(2)         := io.Rs1(23 , 16)
+            sumWires(3)         := io.Rs1(31 , 24)
+        }.otherwise {
+            sumWires(2)         := io.Rs2(23 , 16)            
+            sumWires(3)         := io.Rs2(31 , 24)        
+        }
+
+        io.Rd        := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
         io.vxsat_out := io.vxsat_in
     
     //=========================================
@@ -1160,45 +1405,102 @@ class PextALU extends Module {
     //=========================================
     }.elsewhen(io.operation === ALUops.PMAXH) {
 
-        //  =====CONDITION=====
-        simdMux.io.cond := VecInit(Seq(
-            (io.Rs1(15, 0)).asSInt  > (io.Rs2(15, 0)).asSInt,  // Lower half condition
-            (io.Rs1(31, 16)).asSInt > (io.Rs2(31, 16)).asSInt  // Upper half condition
-        ))
-        //  =====VALUE=====
-        simdMux.io.trueVal := VecInit(Seq(
-            io.Rs1(15, 0),                                  // True value for lower half
-            io.Rs1(31, 16)                                  // True value for upper half
-        ))     
-        simdMux.io.falseVal := VecInit(Seq(
-            io.Rs2(15, 0),                                  // False value for lower half
-            io.Rs2(31, 16)                                  // False value for upper half
-        ))
-        //  =====OUTPUT=====
-        io.Rd        := Cat(simdMux.io.out(1), simdMux.io.out(0)) // Concatenate upper and lower halves
+        twosComplement.io.widthSel := true.B        // 16bit complement generator selected
+        // Adder 0
+        fourByteAdder.io.a(0)       := io.Rs1(7 , 0)
+        twosComplement.io.input(0)  := io.Rs2(7 , 0)                    // Lower 8bits sent as is to 16bit Twos Complement generator. Refer to Two's Complement generator class
+        fourByteAdder.io.b(0)       := twosComplement.io.output(0)      // Lower 8bits from SE-17bit-complemented values goes to (9.W) b input of Adder(REFER to TwosComplementGenerator class).
+        fourByteAdder.io.carryIn(0) := 0.U
+        // Adder 1
+        fourByteAdder.io.a(1)       := Cat(io.Rs1(15) , io.Rs1(15 , 8)) // Sign Extension for first input in order to get SE17
+        twosComplement.io.input(1)  := Cat(io.Rs2(15) , io.Rs2(15 , 8)) // Sign Extended second input sent to 16bit complement generator.  Refer to Two's Complement generator class
+        fourByteAdder.io.b(1)       := twosComplement.io.output(1)      // Upper 9bits from SE-17bit-complemented values goes to (9.W) b input of Adder
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)     
+        // Adder 2
+        fourByteAdder.io.a(2)       := io.Rs1(23 , 16)
+        twosComplement.io.input(2)  := io.Rs2(23 , 16)
+        fourByteAdder.io.b(2)       := twosComplement.io.output(2)
+        fourByteAdder.io.carryIn(2) := 0.U
+        // Adder 3
+        fourByteAdder.io.a(3)       := Cat(io.Rs1(31) , io.Rs1(31 , 24))
+        twosComplement.io.input(3)  := Cat(io.Rs2(31) , io.Rs2(31 , 24))
+        fourByteAdder.io.b(3)       := twosComplement.io.output(3)
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
+
+        when( (io.Rs1(15) === io.Rs2(15)) && (fourByteAdder.io.sum(1)(7) === 1.U) ) {     // Logic remains same as of signed compare minimum above but the results are swapped                  
+            sumWires(0)         := io.Rs2(7 , 0)
+            sumWires(1)         := io.Rs2(15 , 8)                                     
+        }.elsewhen( io.Rs1(15) && !(io.Rs2(15))  ) {                                       
+            sumWires(0)         := io.Rs2(7 , 0)
+            sumWires(1)         := io.Rs2(15 , 8)
+        }.otherwise {
+            sumWires(0)         := io.Rs1(7 , 0)         
+            sumWires(1)         := io.Rs1(15 , 8)        
+        }
+        
+        when( (io.Rs1(31) === io.Rs2(31)) && (fourByteAdder.io.sum(3)(7) === 1.U) ) {     // Logic remains same as of signed compare minimum above but the results are swapped                   
+            sumWires(2)         := io.Rs2(23 , 16)  
+            sumWires(3)         := io.Rs2(31 , 24)                                   
+        }.elsewhen( io.Rs1(31) && !(io.Rs2(31))  ) {                                       
+            sumWires(2)         := io.Rs2(23 , 16)
+            sumWires(3)         := io.Rs2(31 , 24)   
+        }.otherwise {
+            sumWires(2)         := io.Rs1(23 , 16)            
+            sumWires(3)         := io.Rs1(31 , 24)            
+        }
+
+        io.Rd        := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
         io.vxsat_out := io.vxsat_in
     
     //============================================
     // 34. PMAXU.H -- SIMD 16-bit Unsigned Maximum
     //============================================
     }.elsewhen(io.operation === ALUops.PMAXUH) {
+        twosComplement.io.widthSel := true.B        // 16bit complement generator selected
+        // Adder 0
+        fourByteAdder.io.a(0)       := io.Rs1(7 , 0)
+        twosComplement.io.input(0)  := io.Rs2(7 , 0)                    // Lower 8bits sent as is to 16bit Twos Complement generator. Refer to Two's Complement generator class
+        fourByteAdder.io.b(0)       := twosComplement.io.output(0)      // Lower 8bits from SE-17bit-complemented values goes to (9.W) b input of Adder(REFER to TwosComplementGenerator class).
+        fourByteAdder.io.carryIn(0) := 0.U
+        // Adder 1
+        fourByteAdder.io.a(1)       := Cat(io.Rs1(15) , io.Rs1(15 , 8)) // Sign Extension for first input in order to get SE17
+        twosComplement.io.input(1)  := Cat(io.Rs2(15) , io.Rs2(15 , 8)) // Sign Extended second input sent to 16bit complement generator.  Refer to Two's Complement generator class
+        fourByteAdder.io.b(1)       := twosComplement.io.output(1)      // Upper 9bits from SE-17bit-complemented values goes to (9.W) b input of Adder
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)     
+        // Adder 2
+        fourByteAdder.io.a(2)       := io.Rs1(23 , 16)
+        twosComplement.io.input(2)  := io.Rs2(23 , 16)
+        fourByteAdder.io.b(2)       := twosComplement.io.output(2)
+        fourByteAdder.io.carryIn(2) := 0.U
+        // Adder 3
+        fourByteAdder.io.a(3)       := Cat(io.Rs1(31) , io.Rs1(31 , 24))
+        twosComplement.io.input(3)  := Cat(io.Rs2(31) , io.Rs2(31 , 24))
+        fourByteAdder.io.b(3)       := twosComplement.io.output(3)
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
 
-        //  =====CONDITION=====
-        simdMux.io.cond := VecInit(Seq(
-            io.Rs1(15, 0)  > io.Rs2(15, 0),   // Lower half condition
-            io.Rs1(31, 16) > io.Rs2(31, 16)  // Upper half condition
-        ))
-        //  =====VALUE=====
-        simdMux.io.trueVal := VecInit(Seq(
-            io.Rs1(15, 0),                                  // True value for lower half
-            io.Rs1(31, 16)                                  // True value for upper half
-        ))     
-        simdMux.io.falseVal := VecInit(Seq(
-            io.Rs2(15, 0),                                  // False value for lower half
-            io.Rs2(31, 16)                                  // False value for upper half
-        ))
-        //  =====OUTPUT=====
-        io.Rd        := Cat(simdMux.io.out(1), simdMux.io.out(0)) // Concatenate upper and lower halves
+        when( (io.Rs1(15) === io.Rs2(15)) && (fourByteAdder.io.sum(1)(7) === 1.U) ) {     //  result is larger than operands ie ouput's MSB is 1                  
+            sumWires(0)         := io.Rs2(7 , 0)
+            sumWires(1)         := io.Rs2(15 , 8)                                   
+        }.elsewhen( !(io.Rs1(15)) && io.Rs2(15) ) {                                       // Subtrahend is smaller, minuend is larger. Irrespective of the result.
+            sumWires(0)         := io.Rs2(7 , 0)
+            sumWires(1)         := io.Rs2(15 , 8)
+        }.otherwise {
+            sumWires(0)         := io.Rs1(7 , 0)         
+            sumWires(1)         := io.Rs1(15 , 8)        
+        }
+        
+        when( (io.Rs1(31) === io.Rs2(31)) && (fourByteAdder.io.sum(3)(7) === 1.U) ) {     // result is larger than operands ie ouput's MSB is 1                       
+            sumWires(2)         := io.Rs2(23 , 16)  
+            sumWires(3)         := io.Rs2(31 , 24)                                   
+        }.elsewhen( !(io.Rs1(31)) && io.Rs2(31) ) {                                       // Subtrahend is smaller, minuend is larger. Irrespective of the result.
+            sumWires(2)         := io.Rs2(23 , 16)
+            sumWires(3)         := io.Rs2(31 , 24)
+        }.otherwise {
+            sumWires(2)         := io.Rs1(23 , 16)            
+            sumWires(3)         := io.Rs1(31 , 24)        
+        }
+
+        io.Rd        := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
         io.vxsat_out := io.vxsat_in
     
      //==================================ABOLUTE VALUE INSTRUCTION====================================//
@@ -1206,29 +1508,119 @@ class PextALU extends Module {
     // 35. PABS.H -- SIMD 16-bit Absolute       // Possible correction in specification in both nomenclature and operation
     //===================================
         // * Rs1 contains signed 16bit elements
-        // * If 16bit element is >= zero, result is as it is
-        // * For negative values, negate the Rs1 value
+        // * Subtraction of 0-(Signed Element) used
+        // * For positive input value, result is as it.
+        // * For negative input value, result is ouput of subtraction.
+        // * For most negative value, eg, 0x800..., result is saturated to most +ve value ie 0x7FF...
     }.elsewhen(io.operation === ALUops.PABSH) {
+        twosComplement.io.widthSel := true.B        // 16bit complement generator selected
+        // Adder 0
+        fourByteAdder.io.a(0)       := 0.U
+        twosComplement.io.input(0)  := io.Rs1(7 , 0)                    
+        fourByteAdder.io.b(0)       := twosComplement.io.output(0)     
+        fourByteAdder.io.carryIn(0) := 0.U
+        // Adder 1
+        fourByteAdder.io.a(1)       := 0.U 
+        twosComplement.io.input(1)  := Cat(io.Rs1(15) , io.Rs1(15 , 8)) 
+        fourByteAdder.io.b(1)       := twosComplement.io.output(1)      
+        fourByteAdder.io.carryIn(1) := fourByteAdder.io.carryOut(0)     
+        // Adder 2
+        fourByteAdder.io.a(2)       := 0.U
+        twosComplement.io.input(2)  := io.Rs1(23 , 16)
+        fourByteAdder.io.b(2)       := twosComplement.io.output(2)
+        fourByteAdder.io.carryIn(2) := 0.U
+        // Adder 3
+        fourByteAdder.io.a(3)       := 0.U
+        twosComplement.io.input(3)  := Cat(io.Rs1(31) , io.Rs1(31 , 24))
+        fourByteAdder.io.b(3)       := twosComplement.io.output(3)
+        fourByteAdder.io.carryIn(3) := fourByteAdder.io.carryOut(2)
 
-        //  =====CONDITION=====
-        simdMux.io.cond := VecInit(Seq(
-            io.Rs1(15,0).asSInt  < 0.S,   // Lower half condition
-            io.Rs1(31,16).asSInt < 0.S    // Upper half condition
-        ))
-        //    =====VALUE=====
-        simdMux.io.trueVal := VecInit(Seq(
-            (-(io.Rs1(15,0).asSInt)).asUInt,           // True value for lower half. -(-ve) gives +ve value
-            (-(io.Rs1(31,16).asSInt)).asUInt           // True value for upper half. -(-ve) gives +ve value
-        ))     
-        simdMux.io.falseVal := VecInit(Seq(
-            io.Rs1(15,0),                             // False value for lower half. As it is value sent to output
-            io.Rs1(31,16)                             // False value for upper half. As it is value sent to output
-        ))
-        //  =====OUTPUT=====
-        io.Rd        := Cat(simdMux.io.out(1), simdMux.io.out(0)) // Concatenate upper and lower halves
-        io.vxsat_out := io.vxsat_in
+        // Lower half-word
+        when ( io.Rs1(15) === 0.U ) {
+            sumWires(0) := io.Rs1(7,0)
+            sumWires(1) := io.Rs1(15,8)
+        }.otherwise {
+            when( (io.Rs1(15,0)).asSInt === -32768.S ) {      // |-32768| = +32768 which exceeds the positive range of 16-bit register. Thus satuartes.
+                sumWires(0)          := 255.U    // Lower byte gets FF
+                sumWires(1)          := 127.U    // Upper byte gets 7F 
+                overflowDetected (1) := 1.U
+            }.otherwise {
+            sumWires(0) := fourByteAdder.io.sum(0)
+            sumWires(1) := fourByteAdder.io.sum(1)
+            }
+        }
+
+        // Upper half-word
+        when ( io.Rs1(31) === 0.U ) {
+            sumWires(2) := io.Rs1(23,16)
+            sumWires(3) := io.Rs1(31,24)
+        }.otherwise {
+            when( (io.Rs1(31,16)).asSInt === -32768.S ) {      // |-32768| = +32768 which exceeds the positive range of 16-bit register. Thus satuartes.
+                sumWires(2)          := 255.U    // Lower byte gets FF
+                sumWires(3)          := 127.U    // Upper byte gets 7F 
+                overflowDetected (3) := 1.U
+            }.otherwise {
+            sumWires(2) := fourByteAdder.io.sum(2)
+            sumWires(3) := fourByteAdder.io.sum(3)
+            }
+        }
+
+        io.Rd        := Cat(sumWires(3)(7,0) , sumWires(2)(7,0) , sumWires(1)(7,0) , sumWires(0)(7,0))
+        io.vxsat_out := Cat(io.vxsat_in(31, 1) , overflowDetected(1) | overflowDetected(3)) 
     
      //==================================CLIP INSTRUCTIONS====================================//
+    //=============================================
+    // 36. PCLIP.H -- SIMD 16-bit Signed Clip Value      Grayed out on the specification. Operation's enum value is chosen based on the naming logic derived from previous non-grayed instruction.
+    //=============================================
+    }.elsewhen(io.operation === ALUops.PCLIPH) {
+        val imm4u = io.Rs2(3, 0).asUInt
+
+        // Compute limits and masks for signed clipping
+        val upperLimit = (1.S(17.W) << imm4u) - 1.S(17.W)
+        val lowerLimit = ((upperLimit ^ (-1.S(17.W)))(15, 0)).asSInt
+
+        // Configure the clipping module
+        simdClip.io.upperLimit := upperLimit
+        simdClip.io.lowerLimit := lowerLimit
+        //simdClip.io.isUnsigned := false.B // Signed operation
+        simdClip.io.in := VecInit(io.Rs1(15, 0).asSInt, io.Rs1(31, 16).asSInt)
+
+        // Compute mask values for signed overflow detection
+        for (i <- 0 until 2) {
+            simdClip.io.maskValue(i) := simdClip.io.in(i) & lowerLimit
+        }
+
+        // Output wiring
+        io.Rd := Cat(simdClip.io.out(1), simdClip.io.out(0))
+        io.vxsat_out := Cat(io.vxsat_in(31, 1), simdClip.io.overflow(0).asUInt | simdClip.io.overflow(1).asUInt)
+
+    //================================================
+    // 37. PCLIPU.H -- SIMD 16-bit Unsigned Clip Value      Grayed out on the specification. Operation's enum value is chosen based on the naming logic derived from previous non-grayed instruction.
+    //================================================
+    }.elsewhen(io.operation === ALUops.PCLIPUH) {
+        val imm4u = io.Rs2(3, 0).asUInt
+
+        // Compute limits and masks for unsigned clipping
+        val upperLimit = (1.S(17.W) << imm4u) - 1.S(17.W)
+        val lowerLimit = 0.S(16.W) // Unsigned lower limit is 0
+
+        // Configure the clipping module
+        simdClip.io.upperLimit := upperLimit
+        simdClip.io.lowerLimit := lowerLimit
+        //simdClip.io.isUnsigned := true.B // Unsigned operation
+        simdClip.io.in := VecInit(io.Rs1(15, 0).asSInt, io.Rs1(31, 16).asSInt)
+
+        // Compute mask values for unsigned overflow detection
+        for (i <- 0 until 2) {
+            // For unsigned, maskValue = in & ~upperLimit (bits outside the allowed range)
+            simdClip.io.maskValue(i) := simdClip.io.in(i) & (~upperLimit).asSInt
+        }
+
+        // Output wiring
+        io.Rd := Cat(simdClip.io.out(1), simdClip.io.out(0))
+        io.vxsat_out := Cat(io.vxsat_in(31, 1), simdClip.io.overflow(0).asUInt | simdClip.io.overflow(1).asUInt)
+
+    /* clipping using comparators
     //=============================================
     // 36. PCLIP.H -- SIMD 16-bit Signed Clip Value      Grayed out on the specification. Operation's enum value is chosen based on the naming logic derived from previous non-grayed instruction.
     //=============================================
@@ -1260,6 +1652,8 @@ class PextALU extends Module {
     
         io.Rd := Cat(simdClip.io.out(1), simdClip.io.out(0)) // Concatenate upper and lower halves
         io.vxsat_out := Cat(io.vxsat_in(31, 1), simdClip.io.overflow(0) | simdClip.io.overflow(1))
+    */
+    
     //================================================
     //                      NOP
     //================================================    
